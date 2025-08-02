@@ -1,0 +1,19 @@
+{
+    "venvPath": ".",
+    "venv": ".venv",
+    "pythonVersion": "3.10",
+    "include": [
+        "py_image_compress_mcp"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        ".venv",
+        "dist",
+        "build"
+    ],
+    "typeCheckingMode": "basic",
+    "reportMissingImports": true,
+    "reportUnusedImport": true,
+    "reportUnusedVariable": true,
+    "reportDuplicateImport": true
+}
