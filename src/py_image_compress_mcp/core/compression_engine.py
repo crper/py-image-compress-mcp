@@ -4,6 +4,8 @@
 """
 
 import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageOps
@@ -23,6 +25,16 @@ from .strategy import CompressionStrategy
 
 
 logger = get_logger()
+FAST_INFO_EXTRACTOR = ImageInfoExtractor(
+    include_exif=False,
+    include_icc=False,
+    include_xmp=False,
+    include_histogram=False,
+    include_complexity=True,
+)
+FORMAT_PROCESSOR = FormatProcessor()
+STRATEGY = CompressionStrategy()
+OPTIMIZER = CompressionOptimizer()
 
 
 def process_image(config: CompressionConfig) -> CompressionResult:
@@ -48,25 +60,19 @@ def process_image(config: CompressionConfig) -> CompressionResult:
                 log_level="warning",
             )
 
-        # 创建处理组件
-        info_extractor = ImageInfoExtractor()
-        format_processor = FormatProcessor()
-        strategy = CompressionStrategy()
-        optimizer = CompressionOptimizer()
-
         # 提取图片元数据
-        metadata = info_extractor.extract(config.input_path)
+        metadata = FAST_INFO_EXTRACTOR.extract(config.input_path)
 
         # 智能策略决策（仅在用户未明确指定格式和质量时应用）
         if not config.target_format and config.quality_mode == QualityMode.LOSSLESS:
-            decision = strategy.select_optimal(metadata, config)
+            decision = STRATEGY.select_optimal(metadata, config)
             if decision.skip_compression:
                 return _create_skip_result(config, decision.reason)
             config = _apply_strategy_decision(config, decision)
         # 用户明确指定了参数，跳过智能策略，直接压缩
 
         # 执行压缩
-        return _compress_image(config, metadata, format_processor, optimizer)
+        return _compress_image(config, metadata, FORMAT_PROCESSOR, OPTIMIZER)
 
     except Exception as e:
         # 统一的异常处理，确保总是返回 CompressionResult
@@ -86,6 +92,7 @@ def _compress_image(
     """执行图片压缩"""
     original_size = metadata.basic_info.file_size
     output_path = config.get_output_path(config.input_path)
+    _validate_output_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 确定目标格式
@@ -112,14 +119,24 @@ def _compress_image(
         # PNG特殊处理日志
         _log_png_processing(target_format, config, original_size)
 
-        # 保存图片
-        processed_img.save(output_path, **save_params)
-        compressed_size = output_path.stat().st_size
+        temp_output_path = _create_temp_output_path(output_path)
 
-        # 后处理：文件名优化和回退检查
-        output_path, compressed_size = _post_process_result(
-            config, output_path, original_size, compressed_size, target_format
-        )
+        try:
+            processed_img.save(temp_output_path, format=target_format, **save_params)
+            compressed_size = temp_output_path.stat().st_size
+
+            # 后处理：文件名优化和回退检查
+            output_path, compressed_size = _post_process_result(
+                config,
+                temp_output_path,
+                output_path,
+                original_size,
+                compressed_size,
+                target_format,
+            )
+        finally:
+            if temp_output_path.exists():
+                temp_output_path.unlink(missing_ok=True)
 
         return CompressionResult(
             input_path=config.input_path,
@@ -172,11 +189,12 @@ def _log_png_processing(
 
 def _post_process_result(
     config: CompressionConfig,
-    output_path: Any,
+    temp_output_path: Path,
+    output_path: Path,
     original_size: int,
     compressed_size: int,
     target_format: str,
-) -> tuple[Any, int]:
+) -> tuple[Path, int]:
     """后处理：文件名优化和回退检查"""
     # 检查无损压缩效果：如果压缩效果不明显，使用原文件名
     compression_ratio = (
@@ -189,15 +207,9 @@ def _post_process_result(
     )
 
     if should_use_original_name:
-        new_output_path = config.get_output_path(
+        output_path = config.get_output_path(
             config.input_path, target_format, skip_suffix=True
         )
-        if new_output_path != output_path and new_output_path != config.input_path:
-            try:
-                output_path.rename(new_output_path)
-                output_path = new_output_path
-            except OSError as e:
-                logger.warning(f"重命名文件失败: {e}，保持原文件名")
 
     # 回退检查：如果压缩后文件变大，回退到原文件
     fallback_threshold = 1.005 if config.custom_quality is None else 1.02
@@ -206,14 +218,31 @@ def _post_process_result(
             f"压缩导致文件增大 {(compressed_size / original_size - 1) * 100:.1f}%，"
             f"强制回退到原文件（阈值: {(fallback_threshold - 1) * 100:.1f}%）"
         )
-        try:
-            output_path.unlink()
-            shutil.copy2(config.input_path, output_path)
-            compressed_size = original_size
-        except OSError as e:
-            logger.error(f"回退操作失败: {e}")
+        shutil.copy2(config.input_path, output_path)
+        compressed_size = original_size
+        return output_path, compressed_size
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output_path.replace(output_path)
 
     return output_path, compressed_size
+
+
+def _validate_output_path(output_path: Path) -> None:
+    """确保输出路径可作为文件写入。"""
+    if output_path.exists() and output_path.is_dir():
+        raise IsADirectoryError(f"输出路径是目录，无法写入文件: {output_path}")
+
+
+def _create_temp_output_path(output_path: Path) -> Path:
+    """在目标目录中创建临时输出文件路径。"""
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{output_path.stem}_",
+        suffix=output_path.suffix,
+        dir=output_path.parent,
+        delete=False,
+    ) as temp_file:
+        return Path(temp_file.name)
 
 
 def _resize_image(img: Image.Image, resize_config: Any) -> Image.Image:

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, PrivateAttr, computed_field
 
 
 class BasicImageInfo(BaseModel):
@@ -219,6 +219,7 @@ class ImageMetadata(BaseModel):
     xmp_data: "dict[str, Any] | None" = Field(
         None, description="XMP元数据（Pillow 11+支持）"
     )
+    _analysis_cache: Any = PrivateAttr(default=None)
 
     def get_file_size_human(self) -> str:
         """人类可读的文件大小"""
@@ -252,16 +253,13 @@ class ImageCharacteristics(BaseModel):
         formats = []
 
         # 基于透明度
-        if self.basic_info.has_transparency:
+        if self.has_transparency:
             formats.extend(["PNG", "WEBP"])
         else:
             formats.extend(["JPEG", "WEBP"])
 
         # 基于复杂度
-        if self.complexity and self.complexity.overall_complexity in (
-            "very_low",
-            "low",
-        ):
+        if self.is_simple_graphic or self.complexity_score <= 0.25:
             # 简单图形优先PNG
             formats = ["PNG", "WEBP"] + [f for f in formats if f not in ["PNG", "WEBP"]]
 

@@ -75,11 +75,12 @@ class BatchProcessor:
 
             # 查找图像文件，排除输出目录
             exclude_dirs = exclude_dirs or []
+            exclude_paths: list[Path] = []
             if output_dir != input_dir:
-                # 如果输出目录在输入目录内，添加到排除列表
+                # 如果输出目录在输入目录内，排除整个输出根分支，避免重复处理旧产物。
                 try:
-                    output_dir.relative_to(input_dir)
-                    exclude_dirs.append(output_dir.name)
+                    relative_output_dir = output_dir.relative_to(input_dir)
+                    exclude_paths.append(input_dir / relative_output_dir.parts[0])
                 except ValueError:
                     # 输出目录不在输入目录内，无需排除
                     pass
@@ -89,6 +90,7 @@ class BatchProcessor:
                     input_dir,
                     recursive=recursive,
                     exclude_dirs=exclude_dirs,
+                    exclude_paths=exclude_paths,
                 )
             )
 

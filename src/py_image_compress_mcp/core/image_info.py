@@ -46,7 +46,16 @@ class ImageInfoExtractor:
     默认启用所有分析功能，提供完整的图片信息用于智能压缩决策。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        include_exif: bool = True,
+        include_icc: bool = True,
+        include_xmp: bool = True,
+        include_histogram: bool = True,
+        include_complexity: bool = True,
+        analysis_max_pixels: int = 256 * 256,
+    ) -> None:
         """初始化提取器
 
         所有分析功能默认启用，包括：
@@ -56,7 +65,12 @@ class ImageInfoExtractor:
         - 颜色直方图分析
         - 图像复杂度分析
         """
-        pass  # 不需要配置参数，所有功能默认启用
+        self.include_exif = include_exif
+        self.include_icc = include_icc
+        self.include_xmp = include_xmp
+        self.include_histogram = include_histogram
+        self.include_complexity = include_complexity
+        self.analysis_max_pixels = max(1, analysis_max_pixels)
 
     def extract(self, file_path: str | Path) -> ImageMetadata:
         """提取完整的图片元数据
@@ -82,12 +96,17 @@ class ImageInfoExtractor:
             # 提取基础信息
             basic_info = self._extract_basic_info(img, file_path)
 
-            # 提取增强的元数据信息
-            exif_data = self._extract_exif_data(img)
-            icc_profile = self._extract_icc_profile(img)
-            xmp_data = self._extract_xmp_data(img)
-            histogram = self._extract_histogram(img)
-            complexity = self._calculate_complexity(img)
+            analysis_img = self._prepare_analysis_image(img)
+
+            exif_data = self._extract_exif_data(img) if self.include_exif else None
+            icc_profile = self._extract_icc_profile(img) if self.include_icc else None
+            xmp_data = self._extract_xmp_data(img) if self.include_xmp else None
+            histogram = self._extract_histogram(img) if self.include_histogram else None
+            complexity = (
+                self._calculate_complexity(analysis_img)
+                if self.include_complexity
+                else None
+            )
 
             return ImageMetadata(
                 basic_info=basic_info,
@@ -97,6 +116,19 @@ class ImageInfoExtractor:
                 histogram=histogram,
                 complexity=complexity,
             )
+
+    def _prepare_analysis_image(self, img: Image.Image) -> Image.Image:
+        """为计算密集型分析准备采样图。"""
+        pixel_count = img.width * img.height
+        if pixel_count <= self.analysis_max_pixels:
+            return img
+
+        ratio = (self.analysis_max_pixels / pixel_count) ** 0.5
+        new_size = (
+            max(1, int(img.width * ratio)),
+            max(1, int(img.height * ratio)),
+        )
+        return img.resize(new_size, Image.Resampling.BILINEAR)
 
     def _detect_transparency(self, img: Image.Image) -> bool:
         """检测图片是否有透明度 - 使用简化的Pillow API检测"""
@@ -241,7 +273,7 @@ class ImageInfoExtractor:
             img_rgb = img.convert("RGB") if img.mode != "RGB" else img
 
             # 转换为numpy数组进行分析
-            img_array = np.array(img_rgb)
+            img_array = np.asarray(img_rgb, dtype=np.uint8)
 
             # 边缘密度 - 使用简单的梯度计算
             gray = np.mean(img_array, axis=2)
@@ -249,15 +281,12 @@ class ImageInfoExtractor:
             grad_y = np.abs(np.diff(gray, axis=0))
             edge_density = (np.mean(grad_x) + np.mean(grad_y)) / 255.0
 
-            # 颜色多样性 - 计算唯一颜色数量
+            # 颜色多样性 - 使用采样避免全量唯一值计算带来的大开销
             reshaped = img_array.reshape(-1, 3)
-            unique_colors = len(
-                np.unique(
-                    reshaped.view(np.dtype((np.void, reshaped.dtype.itemsize * 3)))
-                )
-            )
-            total_pixels = img_array.shape[0] * img_array.shape[1]
-            color_diversity = min(unique_colors / total_pixels, 1.0)
+            sample_step = max(1, len(reshaped) // 8192)
+            sampled_pixels = reshaped[::sample_step]
+            unique_colors = len(np.unique(sampled_pixels, axis=0))
+            color_diversity = min(unique_colors / max(1, len(sampled_pixels)), 1.0)
 
             # 纹理复杂度 - 使用标准差
             texture_complexity = np.std(gray) / 255.0
@@ -282,48 +311,6 @@ class ImageInfoExtractor:
     # 辅助解析方法
     # ========================================================================
 
-    def _parse_gps_coordinates(
-        self, gps_info: dict[str, Any]
-    ) -> tuple[float | None, float | None]:
-        """解析GPS坐标"""
-        try:
-            if "GPSLatitude" not in gps_info or "GPSLongitude" not in gps_info:
-                return None, None
-
-            lat = self._convert_gps_coordinate(
-                gps_info["GPSLatitude"], gps_info.get("GPSLatitudeRef", "N")
-            )
-            lon = self._convert_gps_coordinate(
-                gps_info["GPSLongitude"], gps_info.get("GPSLongitudeRef", "E")
-            )
-
-            return lat, lon
-
-        except Exception:
-            return None, None
-
-    def _convert_gps_coordinate(
-        self, coord: tuple[float, float, float], ref: str
-    ) -> float:
-        """转换GPS坐标格式"""
-        degrees, minutes, seconds = coord
-        decimal = float(degrees) + float(minutes) / 60 + float(seconds) / 3600
-        if ref in ("S", "W"):
-            decimal = -decimal
-        return decimal
-
-    def _parse_gps_altitude(self, gps_info: dict[str, Any]) -> float | None:
-        """解析GPS海拔"""
-        try:
-            if "GPSAltitude" not in gps_info:
-                return None
-            altitude = float(gps_info["GPSAltitude"])
-            if gps_info.get("GPSAltitudeRef", 0) == 1:
-                altitude = -altitude
-            return altitude
-        except Exception:
-            return None
-
     def _parse_datetime(self, dt_str: str | None) -> datetime | None:
         """解析EXIF日期时间"""
         if not dt_str:
@@ -335,31 +322,11 @@ class ImageInfoExtractor:
 
     def _parse_focal_length(self, focal_length: Any) -> float | None:
         """解析焦距"""
-        if focal_length is None:
-            return None
-        try:
-            if isinstance(focal_length, tuple) and len(focal_length) == 2:
-                return float(focal_length[0]) / float(focal_length[1])
-            # 安全的类型转换
-            if isinstance(focal_length, int | float | str):
-                return float(focal_length)
-            return None
-        except Exception:
-            return None
+        return self._parse_numeric_value(focal_length)
 
     def _parse_aperture(self, f_number: Any) -> float | None:
         """解析光圈值"""
-        if f_number is None:
-            return None
-        try:
-            if isinstance(f_number, tuple) and len(f_number) == 2:
-                return float(f_number[0]) / float(f_number[1])
-            # 安全的类型转换
-            if isinstance(f_number, int | float | str):
-                return float(f_number)
-            return None
-        except Exception:
-            return None
+        return self._parse_numeric_value(f_number)
 
     def _parse_shutter_speed(self, exposure_time: Any) -> str | None:
         """解析快门速度"""
@@ -385,6 +352,19 @@ class ImageInfoExtractor:
             return "Fired" if flash_fired else "No Flash"
         except Exception:
             return None
+
+    def _parse_numeric_value(self, value: Any) -> float | None:
+        """解析数值或有理数元组。"""
+        if value is None:
+            return None
+        try:
+            if isinstance(value, tuple) and len(value) == 2:
+                return float(value[0]) / float(value[1])
+            if isinstance(value, int | float | str):
+                return float(value)
+        except Exception:
+            return None
+        return None
 
     def _parse_white_balance(self, wb_value: Any) -> str | None:
         """解析白平衡"""
@@ -513,6 +493,10 @@ def analyze_image_from_metadata(metadata: ImageMetadata) -> ImageCharacteristics
     Returns:
         ImageCharacteristics: 图片特征分析结果
     """
+    cached = metadata._analysis_cache
+    if isinstance(cached, ImageCharacteristics):
+        return cached
+
     complexity = metadata.complexity
     histogram = metadata.histogram
 
@@ -523,17 +507,16 @@ def analyze_image_from_metadata(metadata: ImageMetadata) -> ImageCharacteristics
     color_count = 0
 
     if complexity:
-        # 基于复杂度判断
-        is_simple_graphic = complexity.overall_complexity == "simple"
-        is_photo_like = complexity.overall_complexity in ("moderate", "complex")
+        avg_complexity = (
+            complexity.edge_density
+            + complexity.color_diversity
+            + complexity.texture_complexity
+        ) / 3
+        complexity_score = float(avg_complexity)
+        color_count = int(complexity.color_diversity * 4096)
 
-        # 基于颜色多样性判断
-        if complexity.color_diversity < 0.1:
-            is_simple_graphic = True
-        elif complexity.color_diversity > 0.5:
-            is_photo_like = True
-
-        complexity_score = complexity.texture_complexity or 0.0
+        is_simple_graphic = complexity.color_diversity < 0.12 and avg_complexity < 0.22
+        is_photo_like = complexity.color_diversity > 0.28 or avg_complexity >= 0.3
 
     # 基于亮度分布判断（照片通常有更均匀的亮度分布）
     if histogram:
@@ -551,13 +534,15 @@ def analyze_image_from_metadata(metadata: ImageMetadata) -> ImageCharacteristics
         except Exception:
             pass  # 忽略亮度统计错误
 
-    return ImageCharacteristics(
+    characteristics = ImageCharacteristics(
         is_simple_graphic=is_simple_graphic,
         is_photo_like=is_photo_like,
         color_count=color_count,
         complexity_score=complexity_score,
         has_transparency=metadata.basic_info.has_transparency,
     )
+    metadata._analysis_cache = characteristics
+    return characteristics
 
 
 def _calculate_unified_complexity_score(histogram: list[int]) -> float:
@@ -587,24 +572,3 @@ def _calculate_unified_complexity_score(histogram: list[int]) -> float:
         return float(min(std_dev, 1.0))
     except Exception:
         return 0.0
-
-
-# 便捷函数
-def is_simple_graphic_pil(img: Image.Image) -> bool:
-    """判断 PIL Image 是否为简单图形"""
-    return analyze_image_from_pil(img).is_simple_graphic
-
-
-def is_photo_like_pil(img: Image.Image) -> bool:
-    """判断 PIL Image 是否为照片类图片"""
-    return analyze_image_from_pil(img).is_photo_like
-
-
-def is_simple_graphic_metadata(metadata: ImageMetadata) -> bool:
-    """判断元数据对应的图片是否为简单图形"""
-    return analyze_image_from_metadata(metadata).is_simple_graphic
-
-
-def is_photo_like_metadata(metadata: ImageMetadata) -> bool:
-    """判断元数据对应的图片是否为照片类图片"""
-    return analyze_image_from_metadata(metadata).is_photo_like

@@ -1,200 +1,156 @@
-# Python Image Compress MCP
+# py-image-compress-mcp
 
-[English](README.md) | [中文](README_zh.md)
+基于官方 Python MCP SDK 的本地图像压缩与图片信息分析服务。
 
-基于 Python 3.10+ 和 Pillow 11+ 构建的现代化图像压缩 MCP 服务器。为 AI 助手提供智能压缩、统一 API 和全面的元数据分析功能。
+这个项目面向桌面端 MCP 客户端和编码工具，故意把接口面控制得很小，只保留两个核心工具：
 
-## ✨ 特性
+- `compress_universal`：压缩单图、转换格式、批量处理目录
+- `get_image_info`：读取尺寸、透明度、EXIF、ICC 和轻量/完整分析信息
 
-- **🎯 简化MCP接口**: 仅提供2个核心工具 - `compress_universal` 和 `get_image_info`
-- **🔄 通用处理**: 单一工具智能处理文件、目录、单/多格式输出
-- **🧠 智能PNG处理**: 优化的PNG处理逻辑，避免文件大小增加
-- **⚡ 智能处理**: 基于图像特征的自动格式选择和质量优化
-- **🚀 并行处理**: 可配置线程/进程池的高性能批量压缩
-- **📊 丰富元数据**: EXIF 数据、ICC 配置文件、复杂度分析和直方图数据提取
-- **🤖 MCP 集成**: 原生支持 Claude Desktop 和其他 MCP 兼容的 AI 助手
-- **🐍 现代 Python**: 基于 Python 3.10+ 特性、Pillow 11+ 和全面的类型安全
+服务默认以本地 `stdio` 模式运行，并已经切到官方 `mcp[cli]` 技术栈。
 
-## 演示视频
-[mcp-demo.webm](https://github.com/user-attachments/assets/b9550ebe-b329-40fe-bce8-449c98931d34)
+## 项目特点
 
-## 🚀 快速开始
+- 官方 Python MCP SDK：`mcp.server.fastmcp.FastMCP`
+- 面向本地使用：适合 Codex、Claude Desktop 等 MCP 桌面客户端
+- 工具少但覆盖核心场景：只有 2 个 MCP 工具
+- 输出安全：先写临时文件，验证通过后再替换正式输出
+- 批量结果稳定：文件发现顺序固定，返回顺序与输入一致
+- 热路径优化：压缩默认走轻量分析，不做全量元数据提取
 
-### 安装
+## 安装
+
+环境要求：
+
+- Python `3.10+`
+- [`uv`](https://docs.astral.sh/uv/)
+
+安装：
 
 ```bash
-# 克隆仓库
 git clone https://github.com/crper/py-image-compress-mcp.git
 cd py-image-compress-mcp
-
-# 安装依赖
 uv sync
-
-# 测试功能
-make examples
-
-# 启动 MCP 服务器
-make run
 ```
 
-### 基本用法
+## 快速开始
+
+启动本地 MCP 服务：
+
+```bash
+uv run py-image-compress-mcp
+```
+
+或者直接运行模块：
+
+```bash
+uv run python -m py_image_compress_mcp
+```
+
+使用官方 MCP 调试工具查看：
+
+```bash
+uv run mcp dev src/py_image_compress_mcp/mcp_server.py
+```
+
+使用官方 CLI 安装到 MCP 客户端：
+
+```bash
+uv run mcp install src/py_image_compress_mcp/mcp_server.py
+```
+
+## MCP 工具
+
+### `compress_universal`
+
+一个工具覆盖以下场景：
+
+- 单文件压缩
+- 单文件格式转换
+- 单文件多格式输出
+- 目录批量压缩
+
+参数：
+
+- `input_path`：文件或目录路径
+- `output_path`：可选输出文件或输出目录
+- `formats`：`None`、单个格式字符串，或格式列表
+- `quality`：`1-100`；`None` 表示无损模式
+- `max_width`、`max_height`：可选尺寸限制
+- `recursive`：目录模式是否递归
+
+常见调用：
+
+- `compress_universal("photo.jpg")`
+- `compress_universal("photo.jpg", formats="WEBP", quality=82)`
+- `compress_universal("photos/", output_path="compressed/", formats="WEBP", quality=80)`
+- `compress_universal("photo.png", output_path="out/", formats=["WEBP", "JPEG", "PNG"], quality=80)`
+
+### `get_image_info`
+
+用于读取图片元数据和分析信息，支持三档返回级别，默认是 `summary`。
+
+参数：
+
+- `input_path`：图片路径
+- `detail`：`basic`、`summary`、`full`
+- `include_histogram`：可选覆盖直方图返回
+- `include_analysis`：可选覆盖复杂度分析返回
+
+三档含义：
+
+- `basic`：尺寸、文件大小、透明度、方向
+- `summary`：默认级别，在 `basic` 基础上增加 EXIF / ICC / complexity
+- `full`：在 `summary` 基础上再返回 histogram
+
+## Python 用法
+
+Python 侧 API 现在比以前更小，推荐显式创建 `ImageCompressor`。
 
 ```python
-from py_image_compress_mcp.compressor import compress_universal
+from py_image_compress_mcp import ImageCompressor
 
-# 单文件压缩，智能格式选择
-result = compress_universal("photo.jpg")
-if result['success']:
-    comp_result = result['result']
-    print(f"✅ {comp_result.get_summary()}")
-    # 输出: "2.1 MB → 856 KB (59.2% 压缩)"
-    # 输出文件: "photo_compress.jpg" (无损) 或 "photo_compress_80.jpg" (质量80)
+compressor = ImageCompressor()
 
-# 指定格式和质量
-result = compress_universal(
+result = compressor.compress_universal(
     input_path="photo.jpg",
+    output="photo.webp",
     formats="WEBP",
-    quality=80,
-    max_width=1920,
-    max_height=1080
+    quality=82,
 )
 
-# 批量文件夹压缩
-result = compress_universal(
-    input_path="photos/",
-    output_path="compressed_photos/",
-    quality=80,
-    recursive=True
-)
-if result['success']:
-    batch_result = result['result']
-    print(f"📁 {batch_result.get_summary()}")
-    # 输出: "处理 15/16 个文件 (成功率 93.8%), 总节省 12.3 MB"
+if result["success"]:
+    print(result["result"].get_summary())
 ```
 
-## 📖 API 参考
-
-### 🎯 MCP 工具（简化接口）
-
-MCP 服务器**仅提供2个核心工具**，最大化简洁性和用户友好性：
-
-#### 1. compress_universal(input_path, output_path=None, formats=None, quality=None, max_width=None, max_height=None, recursive=True)
-
-**通用压缩工具** - 智能处理所有场景（文件、目录、单/多格式输出）：
-
-通用压缩函数，自动检测输入是文件还是目录并相应处理。
-
-**参数**:
-- `input_path` (str): 输入文件或目录路径
-- `output_path` (str | None): 输出路径（未指定时自动生成，带 `_compress` 后缀）
-- `formats` (str | list[str] | None): 输出格式 - 单格式如 "WEBP" 或多格式如 ["JPEG", "PNG", "WEBP"]（None 为智能选择）
-- `quality` (int | None): 压缩质量 1-100（None 为无损）
-- `max_width`, `max_height` (int | None): 自动调整尺寸的最大尺寸
-- `recursive` (bool): 当输入为目录时递归处理子目录（默认: True）
-
-**输出命名**:
-- 无损: `原文件名_compress.扩展名`
-- 有损: `原文件名_compress_[质量].扩展名`
-- 示例: `photo.jpg` → `photo_compress_80.jpg` (质量80)
-
-#### 2. get_image_info(input_path)
-
-**图片分析工具** - 提取全面的元数据和分析报告：
-
-**参数**:
-- `input_path` (str): 图像文件路径
-
-**返回**: 完整的图片分析，包括：
-- 基础信息: 尺寸、格式、文件大小（含人性化格式）、透明度、像素数量（含人性化格式）
-- EXIF数据: 相机信息、拍摄参数、GPS数据、时间戳（含人性化格式）
-- ICC配置: 色彩空间信息、创建日期（含人性化格式）
-- 复杂度分析: 边缘密度、纹理复杂度、压缩难度
-- 颜色直方图: RGB和亮度分布，含亮度统计信息
-
-**新增人性化显示方法**:
-- `basic_info.get_file_size_human()` - "2.1 MB", "856 KB"
-- `basic_info.get_total_pixels_human()` - "210万", "80万"
-- `exif_data.get_datetime_original_human()` - "2小时前", "3天前"
-- `exif_data.get_datetime_digitized_human()` - "1周前", "2个月前"
-- `icc_profile.get_creation_date_human()` - "5年前", "上个月"
-
-### 高级用法
+需要更细控制时，仍可直接调用单文件/多格式接口：
 
 ```python
-from py_image_compress_mcp.compressor import compress_universal
+from py_image_compress_mcp import ImageCompressor
 
-# 多格式压缩 - 生成多个输出文件
-result = compress_universal(
-    input_path="photo.jpg",
-    formats=["JPEG", "PNG", "WEBP"],
-    quality=85
-)
-# 生成: photo_compress_85.jpg, photo_compress_85.png, photo_compress_85.webp
-
-# 目录压缩，带尺寸限制
-result = compress_universal(
-    input_path="photos/",
-    output_path="compressed/",
-    formats="WEBP",
-    quality=80,
-    max_width=1920,
-    max_height=1080,
-    recursive=True
-)
-
-# PNG特殊处理（自动优化）
-result = compress_universal(
-    input_path="image.png",
-    quality=70  # 小PNG保持PNG格式，大PNG可能转换为JPEG
-)
+compressor = ImageCompressor(max_workers=4)
+single = compressor.compress_image("photo.jpg", output_dir="out", quality=80, format="JPEG")
+multi = compressor.compress_multi_format("photo.jpg", "out", ["JPEG", "WEBP"], quality=80)
 ```
 
-## 📊 结果对象
+## Codex App / Codex CLI
 
-所有操作返回统一的 `ProcessingResult` 格式，具有一致的结构：
+把服务注册为本地 MCP：
 
-### CompressionResult
-单文件压缩结果，包含详细指标：
-```python
-result["result"].input_path          # Path: 输入文件路径
-result["result"].output_path         # Path: 输出文件路径
-result["result"].original_size       # int: 原始文件大小（字节）
-result["result"].compressed_size     # int: 压缩后文件大小（字节）
-result["result"].format_used         # str: 使用的压缩格式
-result["result"].quality_used        # int | None: 使用的质量设置
-result["result"].success             # bool: 压缩是否成功
-result["result"].original_dimensions # tuple[int, int]: 原始尺寸 (宽, 高)
-result["result"].final_dimensions    # tuple[int, int]: 最终尺寸 (宽, 高)
-result["result"].was_resized         # bool: 是否进行了尺寸调整
-
-# 实用方法
-result["result"].get_summary()                # "2.1 MB → 856 KB (59.2% 压缩)"
-result["result"].get_compression_ratio()      # 59.2 (压缩百分比)
-result["result"].get_size_saved()            # 1244160 (节省的字节数)
-result["result"].get_original_size_human()   # "2.1 MB"
-result["result"].get_compressed_size_human() # "856 KB"
+```bash
+codex mcp add py-image-compress-local -- \
+  uv run --project /absolute/path/to/py-image-compress-mcp py-image-compress-mcp
 ```
 
-### BatchResult
-目录处理，包含全面统计信息：
-```python
-result["result"].input_dir           # Path: 输入目录路径
-result["result"].output_dir          # Path: 输出目录路径
-result["result"].results             # list[CompressionResult]: 所有文件结果
-result["result"].success             # bool: 是否有任何文件成功
+查看配置：
 
-# 实用方法
-result["result"].get_summary()               # "处理 15/16 个文件 (成功率 93.8%), 总节省 12.3 MB"
-result["result"].get_success_rate()         # 93.75 (成功率百分比)
-result["result"].get_total_size_saved()     # 12884901888 (总节省字节数)
-result["result"].get_success_count()        # 15 (成功处理的文件数)
+```bash
+codex mcp get py-image-compress-local
 ```
 
-## 🤖 MCP 服务器集成
+## Claude Desktop
 
-### Claude Desktop 配置
-
-添加到您的 Claude Desktop 配置中：
+配置示例：
 
 ```json
 {
@@ -204,7 +160,7 @@ result["result"].get_success_count()        # 15 (成功处理的文件数)
       "args": [
         "run",
         "--project",
-        "/path/to/py-image-compress-mcp",
+        "/absolute/path/to/py-image-compress-mcp",
         "py-image-compress-mcp"
       ]
     }
@@ -212,38 +168,57 @@ result["result"].get_success_count()        # 15 (成功处理的文件数)
 }
 ```
 
-### 可用工具
+## 升级说明
 
-- **compress_universal**: 文件和目录的通用压缩函数
-- **get_image_info**: 提取全面的图像元数据和分析
+这轮 API 收敛删除了几个兼容入口：
 
-### 主要改进
+- `from py_image_compress_mcp import compress_universal` 已删除
+- `py_image_compress_mcp.engine.config.build_config` 已删除
 
-- **智能PNG处理**: 有透明度的PNG保持PNG格式，其他可能转换为JPEG以获得更好压缩
-- **避免文件变大**: 优化算法防止压缩后文件比原文件更大
-- **一致命名**: 可预测的输出命名，使用 `_compress` 和 `_compress_[质量]` 后缀
-- **快速处理**: 简化逻辑提高性能，无复杂分析开销
+请改为显式使用 `ImageCompressor()`。
 
-## �️ 开发
+## 开发
+
+常用命令：
 
 ```bash
-# 设置
-git clone https://github.com/crper/py-image-compress-mcp.git
-cd py-image-compress-mcp
-make setup
-
-# 开发工作流
-make dev     # 格式化 + 代码检查 + 测试
-make test    # 仅运行测试
-make run     # 启动 MCP 服务器
+make dev
+make test
+make typecheck
+make benchmark
+make examples
 ```
 
-## 📝 许可证
+当前仓库使用的验证命令：
 
-MIT 许可证 - 详见 LICENSE 文件。
+```bash
+uv run ruff check .
+uv run mypy src tests
+uv run pytest -q
+```
 
-## 🔗 相关项目
+## 性能基准
 
-- [Pillow](https://pillow.readthedocs.io/) - Python 图像库
-- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP 规范
-- [Claude Desktop](https://claude.ai/desktop) - 支持 MCP 的 AI 助手
+运行：
+
+```bash
+uv run python scripts/benchmark.py
+```
+
+基准覆盖：
+
+- `public/images/3.jpg` 元数据提取
+- `public/images/3.jpg` 单图压缩
+- `public/images` 目录批量压缩
+- 如果本机 `~/Downloads` 下存在真实 `png`，还会额外补一轮
+
+## 项目说明
+
+- 传输方式：`stdio`
+- SDK：官方 `mcp[cli]`
+- 服务入口：[src/py_image_compress_mcp/mcp_server.py](/Users/linqunhe/code/self-github/projects/py-image-compress-mcp/src/py_image_compress_mcp/mcp_server.py)
+- 优化与基准报告：[OPTIMIZATION.md](/Users/linqunhe/code/self-github/projects/py-image-compress-mcp/OPTIMIZATION.md)
+
+## License
+
+MIT

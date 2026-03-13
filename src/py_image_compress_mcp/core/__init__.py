@@ -13,10 +13,6 @@ from .image_info import (
     ImageInfoExtractor,
     analyze_image_from_metadata,
     analyze_image_from_pil,
-    is_photo_like_metadata,
-    is_photo_like_pil,
-    is_simple_graphic_metadata,
-    is_simple_graphic_pil,
 )
 from .strategy import CompressionStrategy, StrategyType
 
@@ -30,9 +26,5 @@ __all__ = [
     "StrategyType",
     "analyze_image_from_metadata",
     "analyze_image_from_pil",
-    "is_photo_like_metadata",
-    "is_photo_like_pil",
-    "is_simple_graphic_metadata",
-    "is_simple_graphic_pil",
     "process_image",
 ]

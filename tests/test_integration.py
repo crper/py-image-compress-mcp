@@ -3,11 +3,18 @@
 测试端到端功能和核心集成。
 """
 
+import asyncio
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from py_image_compress_mcp.compressor import ImageCompressor
+from py_image_compress_mcp.config import get_default_max_workers, reset_config
+from py_image_compress_mcp.engine.batch import BatchProcessor
+from py_image_compress_mcp.engine.concurrent_executor import ConcurrentExecutor
 from py_image_compress_mcp.models.compression_config import QualityMode
 from tests.conftest import create_config
 
@@ -61,17 +68,59 @@ class TestMCPServer:
 
     def test_mcp_core_tools(self):
         """测试 MCP 核心工具 - 只有两个工具"""
-        from py_image_compress_mcp.mcp_server import compress_universal, get_image_info
+        from py_image_compress_mcp.mcp_server import (
+            compress_universal,
+            get_image_info,
+            mcp,
+        )
 
         # 测试通用压缩工具
         assert compress_universal is not None
-        assert hasattr(compress_universal, "name")
-        assert compress_universal.name == "compress_universal"
 
         # 测试图片信息工具
         assert get_image_info is not None
-        assert hasattr(get_image_info, "name")
-        assert get_image_info.name == "get_image_info"
+
+        tool_names = {tool.name for tool in asyncio.run(mcp.list_tools())}
+        assert tool_names == {"compress_universal", "get_image_info"}
+
+    def test_get_image_info_supports_lightweight_detail(
+        self, sample_images: dict[str, Path]
+    ):
+        """测试 get_image_info 轻量返回模式。"""
+        from py_image_compress_mcp.mcp_server import get_image_info
+
+        result = get_image_info(str(sample_images["large"]), detail="basic")
+
+        assert result["success"] is True
+        assert "histogram" not in result
+        assert "complexity" not in result
+
+    def test_get_image_info_defaults_to_summary(
+        self, sample_images: dict[str, Path]
+    ):
+        """测试 get_image_info 默认返回 summary。"""
+        from py_image_compress_mcp.mcp_server import get_image_info
+
+        result = get_image_info(str(sample_images["large"]))
+
+        assert result["success"] is True
+        assert "complexity" in result
+        assert "histogram" not in result
+
+    def test_get_image_info_full_preserves_original_histogram(
+        self, temp_dir: Path
+    ):
+        """测试 full 模式返回原图像素级直方图。"""
+        from py_image_compress_mcp.mcp_server import get_image_info
+
+        image_path = temp_dir / "large_histogram.png"
+        Image.new("RGB", (1000, 1000), color="white").save(image_path)
+
+        result = get_image_info(str(image_path), detail="full")
+
+        assert result["success"] is True
+        assert "histogram" in result
+        assert sum(result["histogram"]["red_histogram"]) == 1000 * 1000
 
 
 class TestEndToEnd:
@@ -104,5 +153,129 @@ class TestEndToEnd:
         )
 
         result = process_image(config)
+        assert not result.success
+        assert result.error is not None
+
+    def test_batch_results_keep_input_order(
+        self, sample_images: dict[str, Path], temp_dir: Path
+    ):
+        """测试批量结果顺序与输入顺序一致。"""
+        source_dir = temp_dir / "ordered"
+        source_dir.mkdir()
+
+        ordered_inputs = [
+            sample_images["large"],
+            sample_images["jpeg"],
+            sample_images["transparent"],
+        ]
+        expected_paths: list[Path] = []
+        for index, source in enumerate(ordered_inputs):
+            destination = source_dir / f"{index:02d}_{source.name}"
+            destination.write_bytes(source.read_bytes())
+            expected_paths.append(destination)
+
+        processor = BatchProcessor(max_workers=3, force_executor_type="thread")
+        result = processor.process_directory(
+            input_dir=source_dir,
+            output_dir=temp_dir / "output",
+            quality=80,
+            format="JPEG",
+            recursive=False,
+        )
+
+        actual_paths = [item.input_path for item in result.results]
+        assert actual_paths == expected_paths
+
+    def test_batch_processing_skips_existing_output_tree(self, temp_dir: Path):
+        """测试输出目录位于输入目录内时，不会重复处理旧产物。"""
+        input_dir = temp_dir / "downloads"
+        input_dir.mkdir()
+
+        source_image = input_dir / "source.png"
+        Image.new("RGB", (80, 80), color="red").save(source_image)
+
+        old_output_root = input_dir / "minify-img"
+        old_output_root.mkdir()
+        old_output = old_output_root / "previous.webp"
+        Image.new("RGB", (40, 40), color="blue").save(old_output, "WEBP")
+
+        processor = BatchProcessor(max_workers=2, force_executor_type="thread")
+        result = processor.process_directory(
+            input_dir=input_dir,
+            output_dir=old_output_root / "batch-webp",
+            quality=80,
+            format="WEBP",
+            recursive=True,
+        )
+
+        processed_inputs = [item.input_path for item in result.results]
+
+        assert result.success
+        assert processed_inputs == [source_image]
+
+    def test_fallback_cleanup_does_not_leave_temp_files(
+        self, sample_images: dict[str, Path], temp_dir: Path
+    ):
+        """测试回退逻辑不会残留临时文件。"""
+        compressor = ImageCompressor(max_workers=1)
+
+        result = compressor.compress_image(
+            input_path=sample_images["jpeg"],
+            output_dir=temp_dir,
+            quality=80,
+            format="JPEG",
+        )
+
+        assert result.success
+        assert result.output_path.exists()
+        assert not list(temp_dir.glob(".*"))
+
+    def test_default_max_workers_can_be_overridden(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """测试默认并发数支持环境变量覆盖。"""
+        monkeypatch.setenv("PIC_MAX_WORKERS", "3")
+        reset_config()
+
+        try:
+            assert get_default_max_workers() == 3
+            assert ImageCompressor().max_workers == 3
+        finally:
+            monkeypatch.delenv("PIC_MAX_WORKERS", raising=False)
+            reset_config()
+
+    def test_zero_max_workers_still_raises_validation_error(self):
+        """测试 max_workers=0 仍然视为无效配置。"""
+        with pytest.raises(Exception, match="max_workers 必须大于 0"):
+            ImageCompressor(max_workers=0)
+
+    def test_embedded_context_falls_back_to_thread_pool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """测试内嵌执行上下文会回退到线程池。"""
+        monkeypatch.setitem(
+            sys.modules, "__main__", SimpleNamespace(__file__="<stdin>")
+        )
+
+        executor = ConcurrentExecutor(max_workers=4)
+        selected = executor._choose_executor([create_config(input_path=Path(__file__))])
+
+        assert selected.__name__ == "ThreadPoolExecutor"
+
+    def test_existing_directory_output_path_returns_failure(
+        self, sample_images: dict[str, Path], temp_dir: Path
+    ):
+        """测试输出路径是目录时返回失败。"""
+        compressor = ImageCompressor(max_workers=1)
+        output_dir = temp_dir / "existing-output-dir"
+        output_dir.mkdir()
+
+        result = compressor.compress_image(
+            input_path=sample_images["jpeg"],
+            output_path=output_dir,
+            quality=80,
+            format="JPEG",
+        )
+
         assert not result.success
         assert result.error is not None

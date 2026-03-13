@@ -5,7 +5,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import ValidationError as PydanticValidationError
 
@@ -28,10 +28,6 @@ class ConfigBuilder:
     集成了所有验证逻辑，避免重复代码。
     """
 
-    def __init__(self):
-        """初始化配置构建器"""
-        pass
-
     def build(
         self,
         input_path: str | Path,
@@ -41,73 +37,12 @@ class ConfigBuilder:
         format: str | None = None,
         max_width: int | None = None,
         max_height: int | None = None,
-        **kwargs: Any,
-    ) -> CompressionConfig:
-        """构建压缩配置（不验证，用于向后兼容）
-
-        Args:
-            input_path: 输入文件路径
-            output_path: 输出文件路径（可选）
-            output_dir: 输出目录（可选）
-            quality: 压缩质量 1-100，None为智能选择
-            format: 输出格式 JPEG/PNG/WEBP，None为智能选择
-            max_width: 最大宽度
-            max_height: 最大高度
-            **kwargs: 其他配置参数
-
-        Returns:
-            CompressionConfig: 构建的配置对象
-
-        Raises:
-            CustomValidationError: 参数验证失败
-        """
-        try:
-            # 标准化路径参数
-            input_path = Path(input_path)
-            output_path = Path(output_path) if output_path else None
-            output_dir = Path(output_dir) if output_dir else None
-
-            # 直接构建配置
-            return self._create_config(
-                input_path=input_path,
-                output_path=output_path,
-                output_dir=output_dir,
-                quality=quality,
-                format=format,
-                max_width=max_width,
-                max_height=max_height,
-                **kwargs,
-            )
-
-        except PydanticValidationError as e:
-            error_msg = self._format_validation_error(e)
-            raise CustomValidationError(
-                error_msg,
-                Path(input_path) if isinstance(input_path, str) else input_path,
-            ) from e
-        except Exception as e:
-            raise CustomValidationError(
-                f"配置构建失败: {e!s}",
-                Path(input_path) if isinstance(input_path, str) else input_path,
-            ) from e
-
-    def validate_and_build(
-        self,
-        input_path: str | Path,
-        output_path: str | Path | None = None,
-        output_dir: str | Path | None = None,
-        quality: int | None = None,
-        format: str | None = None,
-        max_width: int | None = None,
-        max_height: int | None = None,
-        validate_file_exists: bool = True,
+        validate_file_exists: bool = False,
         validate_is_file: bool = False,
         formats_list: list[str] | None = None,
         **kwargs: Any,
     ) -> CompressionConfig:
-        """验证参数并构建压缩配置
-
-        集成了所有验证逻辑，避免重复代码。
+        """构建压缩配置。
 
         Args:
             input_path: 输入文件路径
@@ -117,9 +52,6 @@ class ConfigBuilder:
             format: 输出格式 JPEG/PNG/WEBP，None为智能选择
             max_width: 最大宽度
             max_height: 最大高度
-            validate_file_exists: 是否验证文件存在
-            validate_is_file: 是否验证输入是文件（而非目录）
-            formats_list: 多格式验证时的格式列表
             **kwargs: 其他配置参数
 
         Returns:
@@ -129,12 +61,10 @@ class ConfigBuilder:
             CustomValidationError: 参数验证失败
         """
         try:
-            # 标准化路径参数
-            input_path = Path(input_path)
-            output_path = Path(output_path) if output_path else None
-            output_dir = Path(output_dir) if output_dir else None
+            input_path, output_path, output_dir = self._normalize_paths(
+                input_path, output_path, output_dir
+            )
 
-            # 执行验证
             self._validate_common_params(
                 input_path, quality, format, max_width, max_height, validate_file_exists
             )
@@ -147,7 +77,6 @@ class ConfigBuilder:
             if formats_list is not None:
                 self._validate_multi_format_params(input_path, output_dir, formats_list)
 
-            # 构建配置
             return self._create_config(
                 input_path=input_path,
                 output_path=output_path,
@@ -160,18 +89,9 @@ class ConfigBuilder:
             )
 
         except PydanticValidationError as e:
-            error_msg = self._format_validation_error(e)
-            raise CustomValidationError(
-                error_msg,
-                Path(input_path) if isinstance(input_path, str) else input_path,
-            ) from e
-        except CustomValidationError:
-            raise  # 重新抛出自定义验证错误
+            self._raise_build_error(e, input_path, self._format_validation_error(e))
         except Exception as e:
-            raise CustomValidationError(
-                f"配置构建失败: {e!s}",
-                Path(input_path) if isinstance(input_path, str) else input_path,
-            ) from e
+            self._raise_build_error(e, input_path, f"配置构建失败: {e!s}")
 
     def _validate_common_params(
         self,
@@ -251,6 +171,29 @@ class ConfigBuilder:
 
         return validated_formats
 
+    def _normalize_paths(
+        self,
+        input_path: str | Path,
+        output_path: str | Path | None,
+        output_dir: str | Path | None,
+    ) -> tuple[Path, Path | None, Path | None]:
+        """标准化路径参数。"""
+        return (
+            Path(input_path),
+            Path(output_path) if output_path else None,
+            Path(output_dir) if output_dir else None,
+        )
+
+    def _raise_build_error(
+        self,
+        error: Exception,
+        input_path: str | Path,
+        message: str,
+    ) -> NoReturn:
+        """统一抛出配置构建错误。"""
+        path = Path(input_path) if isinstance(input_path, str) else input_path
+        raise CustomValidationError(message, path) from error
+
     def _create_config(
         self,
         input_path: Path,
@@ -326,21 +269,3 @@ class ConfigBuilder:
             else:
                 messages.append(msg)
         return "; ".join(messages)
-
-
-# 全局配置构建器实例
-_default_builder = ConfigBuilder()
-
-
-def build_config(**kwargs: Any) -> CompressionConfig:
-    """便捷的配置构建函数
-
-    使用全局配置构建器实例构建配置。
-
-    Args:
-        **kwargs: 配置参数
-
-    Returns:
-        CompressionConfig: 构建的配置对象
-    """
-    return _default_builder.build(**kwargs)

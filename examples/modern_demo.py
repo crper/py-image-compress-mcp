@@ -19,7 +19,6 @@ from py_image_compress_mcp import (
     CompressionResult,
     ImageCompressor,
     MultiFormatResult,
-    compress_universal,
 )
 from py_image_compress_mcp.core.image_info import ImageInfoExtractor
 from py_image_compress_mcp.core.strategy import CompressionStrategy
@@ -110,6 +109,7 @@ def demo_single_file_compression():
     # 使用最大的图片进行演示（更好的压缩效果）
     test_image = max(sample_images, key=lambda x: x.stat().st_size)
     output_dir = get_output_dir("single_file")
+    compressor = ImageCompressor()
     print(f"📸 使用素材: {test_image.name}")
     print(f"📁 输出目录: {output_dir}")
 
@@ -118,7 +118,7 @@ def demo_single_file_compression():
     analyze_smart_strategy(test_image)
 
     output_file1 = output_dir / f"{test_image.stem}_smart{test_image.suffix}"
-    result1 = compress_universal(
+    result1 = compressor.compress_universal(
         str(test_image),
         output=str(output_file1),  # 不指定质量，让智能策略决定
     )
@@ -127,7 +127,7 @@ def demo_single_file_compression():
 
     # 2. 指定格式和质量
     output_file2 = output_dir / f"{test_image.stem}_q70.jpg"
-    result2 = compress_universal(
+    result2 = compressor.compress_universal(
         str(test_image), output=str(output_file2), formats="JPEG", quality=70
     )
     if result2["success"]:
@@ -135,7 +135,7 @@ def demo_single_file_compression():
 
     # 3. 带尺寸调整
     output_file3 = output_dir / f"{test_image.stem}_resized.webp"
-    result3 = compress_universal(
+    result3 = compressor.compress_universal(
         str(test_image),
         output=str(output_file3),
         formats="WEBP",
@@ -159,11 +159,12 @@ def demo_multi_format_compression():
     sorted_images = sorted(sample_images, key=lambda x: x.stat().st_size, reverse=True)
     test_image = sorted_images[1] if len(sorted_images) > 1 else sorted_images[0]
     output_dir = get_output_dir("multi_format")
+    compressor = ImageCompressor()
 
     print(f"📸 使用素材: {test_image.name}")
 
     # 多格式输出
-    result = compress_universal(
+    result = compressor.compress_universal(
         str(test_image),
         output=str(output_dir),
         formats=["JPEG", "WEBP", "PNG"],
@@ -200,11 +201,12 @@ def demo_batch_processing():
     # 直接使用 public/images 目录进行批量处理
     images_dir = Path(__file__).parent.parent / "public" / "images"
     output_dir = get_output_dir("batch_processing")
+    compressor = ImageCompressor()
 
     print(f"📁 批量处理目录: {images_dir}")
 
     # 批量压缩
-    result = compress_universal(
+    result = compressor.compress_universal(
         str(images_dir),
         output=str(output_dir),
         formats="JPEG",

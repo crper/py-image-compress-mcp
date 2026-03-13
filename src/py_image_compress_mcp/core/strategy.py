@@ -89,7 +89,7 @@ class CompressionStrategy:
     def _analyze_and_decide(self, metadata: ImageMetadata) -> CompressionDecision:
         """基于图片特征分析并决策 - 优先保守策略避免负优化"""
         basic = metadata.basic_info
-        complexity = metadata.complexity
+        characteristics = analyze_image_from_metadata(metadata)
 
         # 计算文件大小（MB）
         file_size_mb = basic.file_size / (1024 * 1024)
@@ -112,12 +112,10 @@ class CompressionStrategy:
         # 决策因子
         factors: dict[str, bool] = {
             "large_file": file_size_mb > self.size_threshold_mb,
-            "high_complexity": bool(
-                complexity and complexity.overall_complexity == "complex"
-            ),
+            "high_complexity": characteristics.complexity_score >= 0.45,
             "has_transparency": basic.has_transparency,
-            "is_photo": self._is_photo_like(metadata),
-            "is_simple_graphic": self._is_simple_graphic(metadata),
+            "is_photo": characteristics.is_photo_like,
+            "is_simple_graphic": characteristics.is_simple_graphic,
         }
 
         # 决策逻辑
@@ -331,11 +329,11 @@ class CompressionStrategy:
             # 基础估算：基于像素数量
             pixel_count = basic.width * basic.height
 
-            if complexity and complexity.overall_complexity in ("very_low", "simple"):
+            if complexity and complexity.overall_complexity in ("very_low", "low"):
                 # 极简单/简单图像：颜色数量较少
                 # 对于大图片也要合理限制颜色数量估算
                 return min(256, max(16, pixel_count // 1000))
-            if complexity and complexity.overall_complexity == "complex":
+            if complexity and complexity.overall_complexity in ("high", "very_high"):
                 # 复杂图像：颜色数量较多
                 return min(65536, pixel_count // 10)
             # 中等复杂度

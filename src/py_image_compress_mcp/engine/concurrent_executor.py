@@ -1,12 +1,9 @@
-"""并发执行器模块。
-
-提供通用的并发任务执行功能，消除重复的并发处理逻辑。
-"""
+"""并发执行器模块。"""
 
 import logging
+import sys
 from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Any
 
 from ..exceptions import ErrorHandler
@@ -14,14 +11,6 @@ from ..models.compression_result import CompressionResult
 
 
 logger = logging.getLogger(__name__)
-
-
-class TaskConfig:
-    """任务配置基类"""
-
-    def __init__(self, file_path: Path, **kwargs: Any) -> None:
-        self.file_path = file_path
-        self.kwargs = kwargs
 
 
 class ConcurrentExecutor:
@@ -57,10 +46,11 @@ class ConcurrentExecutor:
         if not compression_configs:
             return []
 
-        results: list[CompressionResult] = []
+        results: list[CompressionResult | None] = [None] * len(compression_configs)
         executor_class = self._choose_executor(compression_configs)
+        worker_count = max(1, min(self.max_workers, len(compression_configs)))
 
-        with executor_class(max_workers=self.max_workers) as executor:
+        with executor_class(max_workers=worker_count) as executor:
             # 提交任务阶段
             future_to_config = self._submit_tasks(
                 executor, compression_configs, task_function, results
@@ -69,43 +59,45 @@ class ConcurrentExecutor:
             # 收集结果阶段
             self._collect_results(future_to_config, results)
 
-        return results
+        return [result for result in results if result is not None]
 
     def _submit_tasks(
         self,
         executor: Any,
         compression_configs: Sequence[Any],
         task_function: Callable[[Any], CompressionResult],
-        results: list[CompressionResult],
-    ) -> dict[Any, Any]:
+        results: list[CompressionResult | None],
+    ) -> dict[Any, tuple[int, Any]]:
         """提交任务到执行器"""
-        future_to_config = {}
+        future_to_config: dict[Any, tuple[int, Any]] = {}
 
-        for config in compression_configs:
+        for index, config in enumerate(compression_configs):
             try:
                 # 直接提交任务，无需额外的配置构建
                 future = executor.submit(task_function, config)
-                future_to_config[future] = config
+                future_to_config[future] = (index, config)
 
             except Exception as e:
                 error_result = ErrorHandler.handle_with_context(
                     e, config.input_path, "任务提交", log_level="error"
                 )
-                results.append(error_result)
+                results[index] = error_result
 
         return future_to_config
 
     def _collect_results(
-        self, future_to_config: dict[Any, Any], results: list[CompressionResult]
+        self,
+        future_to_config: dict[Any, tuple[int, Any]],
+        results: list[CompressionResult | None],
     ) -> None:
         """收集任务执行结果"""
         for future in as_completed(future_to_config):
-            config = future_to_config[future]
+            index, config = future_to_config[future]
             file_path = config.input_path
 
             try:
                 result = future.result()
-                results.append(result)
+                results[index] = result
 
                 # 记录执行结果
                 if hasattr(result, "success"):
@@ -120,7 +112,7 @@ class ConcurrentExecutor:
                 error_result = ErrorHandler.handle_with_context(
                     e, file_path, "并发任务处理", log_level="error"
                 )
-                results.append(error_result)
+                results[index] = error_result
 
     def _choose_executor(self, compression_configs: Sequence[Any]) -> type:
         """根据任务特征选择合适的执行器
@@ -136,6 +128,10 @@ class ConcurrentExecutor:
             return ThreadPoolExecutor
         if self.force_executor_type == "process":
             return ProcessPoolExecutor
+
+        if _should_avoid_process_pool():
+            logger.debug("当前执行上下文不适合进程池，回退到线程池")
+            return ThreadPoolExecutor
 
         task_count = len(compression_configs)
 
@@ -163,3 +159,12 @@ class ConcurrentExecutor:
             f"使用ThreadPoolExecutor: 任务数={task_count}, 平均大小={avg_size / 1024 / 1024:.1f}MB"
         )
         return ThreadPoolExecutor
+
+
+def _should_avoid_process_pool() -> bool:
+    """判断当前上下文是否应避免进程池。"""
+    main_module = sys.modules.get("__main__")
+    main_file = getattr(main_module, "__file__", None)
+    if not isinstance(main_file, str):
+        return True
+    return main_file.endswith("<stdin>")

@@ -9,7 +9,7 @@ from typing import Any
 from PIL import Image
 
 from ..models.compression_config import CompressionConfig
-from .image_info import ImageCharacteristics, analyze_image_from_pil
+from .image_info import ImageCharacteristics
 
 
 logger = logging.getLogger(__name__)
@@ -71,19 +71,17 @@ class FormatProcessor:
             logger.warning(f"不支持的格式: {target_format}, 使用JPEG")
             target_format = "JPEG"
 
-        match target_format:
-            case "JPEG":
-                return self._prepare_for_jpeg(img)
-            case "PNG":
-                return self._prepare_for_png(img)
-            case "WEBP":
-                return self._prepare_for_webp(img)
-            case "AVIF" if self.avif_supported:
-                return self._prepare_for_avif(img)
-            case "HEIF" if self.heif_supported:
-                return self._prepare_for_heif(img)
-            case _:
-                return img
+        if target_format == "JPEG":
+            return self._prepare_for_jpeg(img)
+        if target_format == "PNG":
+            return self._prepare_for_png(img)
+        if target_format == "WEBP":
+            return self._prepare_modern_format(img)
+        if target_format == "AVIF" and self.avif_supported:
+            return self._prepare_modern_format(img)
+        if target_format == "HEIF" and self.heif_supported:
+            return self._prepare_modern_format(img)
+        return img
 
     def _prepare_for_jpeg(self, img: Image.Image) -> Image.Image:
         """为JPEG格式准备图片，使用更严谨的色彩空间处理"""
@@ -252,86 +250,17 @@ class FormatProcessor:
         except Exception:
             return False
 
-    def _prepare_for_webp(self, img: Image.Image) -> Image.Image:
-        """为WebP格式准备图片"""
-        # WebP支持RGB和RGBA
+    def _prepare_modern_format(self, img: Image.Image) -> Image.Image:
+        """为支持 RGB/RGBA 的现代格式准备图片。"""
         if img.mode == "P":
-            # 调色板模式，检查是否有透明度
             if "transparency" in img.info:
                 return img.convert("RGBA")
             return img.convert("RGB")
         if img.mode == "LA":
-            # 灰度+alpha转换为RGBA
             return img.convert("RGBA")
         if img.mode == "L":
-            # 灰度转换为RGB
             return img.convert("RGB")
-
-        # RGB和RGBA保持不变
         return img
-
-    def _prepare_for_avif(self, img: Image.Image) -> Image.Image:
-        """为AVIF格式准备图片
-
-        AVIF是现代高效格式，支持RGB、RGBA，压缩效果优于WebP。
-        """
-        if img.mode == "P":
-            # 调色板模式，检查是否有透明度
-            if "transparency" in img.info:
-                return img.convert("RGBA")
-            return img.convert("RGB")
-        if img.mode == "LA":
-            # 灰度+alpha转换为RGBA
-            return img.convert("RGBA")
-        if img.mode == "L":
-            # 灰度转换为RGB
-            return img.convert("RGB")
-
-        # RGB和RGBA保持不变
-        return img
-
-    def _prepare_for_heif(self, img: Image.Image) -> Image.Image:
-        """为HEIF格式准备图片
-
-        HEIF是Apple推广的现代格式，压缩效果好。
-        """
-        if img.mode == "P":
-            # 调色板模式，检查是否有透明度
-            if "transparency" in img.info:
-                return img.convert("RGBA")
-            return img.convert("RGB")
-        if img.mode == "LA":
-            # 灰度+alpha转换为RGBA
-            return img.convert("RGBA")
-        if img.mode == "L":
-            # 灰度转换为RGB
-            return img.convert("RGB")
-
-        # RGB和RGBA保持不变
-        return img
-
-    def get_optimal_format(self, img: Image.Image, prefer_quality: bool = True) -> str:
-        """根据图片特征推荐最优格式（兼容性方法）
-
-        Args:
-            img: PIL图片对象
-            prefer_quality: 是否优先考虑质量
-
-        Returns:
-            str: 推荐的格式
-        """
-        # 分析图片特征
-        characteristics = analyze_image_from_pil(img)
-
-        # 检查透明度
-        has_transparency = img.mode in ("RGBA", "LA") or "transparency" in img.info
-
-        # 使用统一的格式推荐逻辑
-        return self.get_optimal_format_from_characteristics(
-            characteristics=characteristics,
-            has_transparency=has_transparency,
-            prefer_quality=prefer_quality,
-        )
 
     def get_optimal_format_from_characteristics(
         self,
@@ -354,40 +283,21 @@ class FormatProcessor:
         if user_preference:
             return user_preference.upper()
 
-        # 有透明度的图片
         if has_transparency:
-            return self._select_format_for_transparency(prefer_quality)
-
-        # 简单图形优先PNG
+            if prefer_quality:
+                return "PNG"
+            if self.avif_supported:
+                return "AVIF"
+            return "WEBP"
         if characteristics.is_simple_graphic:
-            return self._select_format_for_graphics()
-
-        # 复杂图片（照片类）优先现代格式
-        if characteristics.is_photo_like:
-            return self._select_format_for_photos(prefer_quality)
-
-        # 默认选择最佳现代格式
-        return self._select_default_modern_format()
-
-    def _select_format_for_transparency(self, prefer_quality: bool) -> str:
-        """为有透明度的图片选择最优格式"""
-        if prefer_quality:
             return "PNG"
-        if self.avif_supported:
-            return "AVIF"  # AVIF 对透明度支持更好
-        return "WEBP"
-
-    def _select_format_for_graphics(self) -> str:
-        """为简单图形选择最优格式"""
-        return "PNG"  # 简单图形PNG效果最佳
-
-    def _select_format_for_photos(self, prefer_quality: bool) -> str:
-        """为照片类图片选择最优格式"""
-        if prefer_quality and self.avif_supported:
-            return "AVIF"  # AVIF 压缩效果最佳
-        if self.heif_supported:
-            return "HEIF"  # HEIF 也是不错的选择
-        return "JPEG"
+        if characteristics.is_photo_like:
+            if prefer_quality and self.avif_supported:
+                return "AVIF"
+            if self.heif_supported:
+                return "HEIF"
+            return "JPEG"
+        return self._select_default_modern_format()
 
     def _select_default_modern_format(self) -> str:
         """选择默认的现代格式"""

@@ -4,13 +4,16 @@
 """
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .compressor import ImageCompressor
 from .core.image_info import ImageInfoExtractor
+from .models import BatchResult, CompressionResult, ImageMetadata, MultiFormatResult
 from .utils.message_formatter import MessageFormatter
 
 
@@ -109,13 +112,33 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 创建MCP应用
-mcp: FastMCP[Any] = FastMCP("现代化图像压缩服务")
+mcp: FastMCP[Any] = FastMCP(
+    name="py-image-compress",
+    instructions=(
+        "Compress local images and inspect image metadata. "
+        "Use compress_universal for file or directory workflows. "
+        "Use get_image_info when you need dimensions, transparency, EXIF, ICC, "
+        "or complexity details."
+    ),
+    dependencies=["pillow", "numpy", "humanize", "defusedxml"],
+)
 
 # 全局压缩器实例
-compressor = ImageCompressor(max_workers=4)
+compressor = ImageCompressor()
 
 # 全局图片信息提取器实例
 image_info_extractor = ImageInfoExtractor()
+lightweight_image_info_extractor = ImageInfoExtractor(
+    include_exif=False,
+    include_icc=False,
+    include_xmp=False,
+    include_histogram=False,
+    include_complexity=False,
+)
+summary_image_info_extractor = ImageInfoExtractor(
+    include_histogram=False,
+    include_xmp=False,
+)
 
 
 # ============================================================================
@@ -123,7 +146,15 @@ image_info_extractor = ImageInfoExtractor()
 # ============================================================================
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        idempotentHint=False,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+    structured_output=True,
+)
 def compress_universal(
     input_path: str,
     output_path: str | None = None,
@@ -133,41 +164,10 @@ def compress_universal(
     max_height: int | None = None,
     recursive: bool = True,
 ) -> MCPCompressionResponse:
-    """🎯 通用图像压缩工具 - 处理所有压缩场景的统一接口
+    """压缩图片或批量处理目录。
 
-    智能检测输入类型（单文件/多文件/目录）并自动选择最优处理策略。
-    支持单格式、多格式输出，批量处理，让用户无感知底层复杂性。
-
-    Args:
-        input_path: 输入路径（支持单个文件或目录）
-        output_path: 输出路径（可选，默认智能生成）
-        formats: 输出格式，支持：
-            - None: 智能选择最优格式
-            - 字符串: 单格式如 "WEBP"
-            - 列表: 多格式如 ["JPEG", "PNG", "WEBP"]
-        quality: 压缩质量 1-100（None 为无损压缩）
-        max_width: 最大宽度限制（像素）
-        max_height: 最大高度限制（像素）
-        recursive: 目录处理时是否递归子目录
-
-    Returns:
-        dict: 统一的压缩结果，自动适配不同场景的返回格式
-
-    使用场景:
-        # 📁 单文件压缩（智能优化）
-        compress_universal("photo.jpg")
-
-        # 📁 单文件多格式输出
-        compress_universal("photo.jpg", formats=["JPEG", "PNG", "WEBP"], quality=80)
-
-        # 📂 目录批量压缩
-        compress_universal("photos/", output_path="output/", quality=60)
-
-        # 🔄 格式转换
-        compress_universal("image.webp", output_path="image.jpg", formats="JPEG", quality=70)
-
-        # 📐 尺寸限制批量处理
-        compress_universal("images/", max_width=1920, max_height=1080, recursive=True)
+    支持单文件压缩、单文件多格式输出、格式转换和目录批量压缩。
+    返回统一的结构化结果，包含输出路径、压缩比例、节省空间和错误信息。
     """
     try:
         input_path_obj = Path(input_path)
@@ -209,72 +209,82 @@ def compress_universal(
 
 def _format_universal_result(result: Any) -> dict[str, Any]:
     """格式化通用压缩结果为MCP响应格式"""
-    # 检查结果类型并相应格式化
-    if hasattr(result, "get_summary"):
-        # 单文件结果 (CompressionResult)
-        return {
-            "type": "single_file",
-            "input_path": str(result.input_path),
-            "output_path": str(result.output_path),
-            "original_size": result.original_size,
-            "compressed_size": result.compressed_size,
-            "format_used": result.format_used,
-            "quality_used": result.quality_used,
-            "compression_ratio": result.get_compression_ratio(),
-            "size_saved": result.get_size_saved(),
-            "summary": result.get_summary(),
-            "success": result.success,
-            "error": result.error,
-        }
-    if hasattr(result, "results") and hasattr(result, "input_dir"):
-        # 批量结果 (BatchResult)
-        return {
-            "type": "batch",
-            "input_dir": str(result.input_dir),
-            "output_dir": str(result.output_dir),
-            "total_files": result.get_total_count(),
-            "successful_files": result.get_success_count(),
-            "failed_files": result.get_failure_count(),
-            "success_rate": result.get_success_rate(),
-            "total_size_saved": result.get_total_size_saved(),
-            "summary": result.get_summary(),
-            "results": [
-                {
-                    "input_path": str(r.input_path),
-                    "output_path": str(r.output_path),
-                    "success": r.success,
-                    "format_used": r.format_used,
-                    "compression_ratio": r.get_compression_ratio() if r.success else 0,
-                    "size_saved": r.get_size_saved() if r.success else 0,
-                    "error": r.error,
-                }
-                for r in result.results
-            ],
-        }
-    if hasattr(result, "results") and hasattr(result, "input_path"):
-        # 多格式结果 (MultiFormatResult)
-        return {
-            "type": "multi_format",
-            "input_path": str(result.input_path),
-            "total_formats": len(result.results),
-            "successful_formats": sum(1 for r in result.results if r.success),
-            "results": [
-                {
-                    "format": r.format_used,
-                    "output_path": str(r.output_path),
-                    "success": r.success,
-                    "compression_ratio": r.get_compression_ratio() if r.success else 0,
-                    "size_saved": r.get_size_saved() if r.success else 0,
-                    "summary": r.get_summary() if r.success else None,
-                    "error": r.error,
-                }
-                for r in result.results
-            ],
-        }
+    if isinstance(result, CompressionResult):
+        return _format_compression_result(result)
+    if isinstance(result, BatchResult):
+        return _format_batch_result(result)
+    if isinstance(result, MultiFormatResult):
+        return _format_multi_format_result(result)
+
     # 未知结果类型，返回基本信息
     return {
         "type": "unknown",
         "result": str(result),
+    }
+
+
+def _format_compression_result(result: CompressionResult) -> dict[str, Any]:
+    """格式化单文件压缩结果。"""
+    return {
+        "type": "single_file",
+        "input_path": str(result.input_path),
+        "output_path": str(result.output_path),
+        "original_size": result.original_size,
+        "compressed_size": result.compressed_size,
+        "format_used": result.format_used,
+        "quality_used": result.quality_used,
+        "compression_ratio": result.get_compression_ratio(),
+        "size_saved": result.get_size_saved(),
+        "summary": result.get_summary(),
+        "success": result.success,
+        "error": result.error,
+    }
+
+
+def _format_batch_result(result: BatchResult) -> dict[str, Any]:
+    """格式化批量压缩结果。"""
+    return {
+        "type": "batch",
+        "input_dir": str(result.input_dir),
+        "output_dir": str(result.output_dir),
+        "total_files": result.get_total_count(),
+        "successful_files": result.get_success_count(),
+        "failed_files": result.get_failure_count(),
+        "success_rate": result.get_success_rate(),
+        "total_size_saved": result.get_total_size_saved(),
+        "summary": result.get_summary(),
+        "results": [_format_collection_item(item) for item in result.results],
+    }
+
+
+def _format_multi_format_result(result: MultiFormatResult) -> dict[str, Any]:
+    """格式化多格式压缩结果。"""
+    return {
+        "type": "multi_format",
+        "input_path": str(result.input_path),
+        "total_formats": len(result.results),
+        "successful_formats": sum(1 for item in result.results if item.success),
+        "results": [
+            {
+                "format": item.format_used,
+                "summary": item.get_summary() if item.success else None,
+                **_format_collection_item(item),
+            }
+            for item in result.results
+        ],
+    }
+
+
+def _format_collection_item(result: CompressionResult) -> dict[str, Any]:
+    """格式化集合中的压缩结果项。"""
+    return {
+        "input_path": str(result.input_path),
+        "output_path": str(result.output_path),
+        "success": result.success,
+        "format_used": result.format_used,
+        "compression_ratio": result.get_compression_ratio() if result.success else 0,
+        "size_saved": result.get_size_saved() if result.success else 0,
+        "error": result.error,
     }
 
 
@@ -283,20 +293,26 @@ def _format_universal_result(result: Any) -> dict[str, Any]:
 # ============================================================================
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        idempotentHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+    structured_output=True,
+)
 def get_image_info(
     input_path: str,
+    detail: str = "summary",
+    include_histogram: bool | None = None,
+    include_analysis: bool | None = None,
 ) -> MCPImageInfoResponse:
-    """获取图片的详细信息和元数据。
+    """读取图片元数据和分析信息。
 
-    提取图片的基础信息、EXIF数据、ICC配置文件等详细元数据。
-    所有分析功能默认启用，包括颜色直方图和复杂度分析。
-
-    Args:
-        input_path: 输入图像文件路径
-
-    Returns:
-        dict: 图片信息，包含基础信息、EXIF、ICC配置文件、直方图、复杂度分析等
+    `basic` 返回基础尺寸与透明度信息。
+    `summary` 额外返回 EXIF、ICC 和复杂度信息。
+    `full` 再额外返回完整直方图数据。
     """
     try:
         # 直接使用 Path 进行路径处理
@@ -306,83 +322,21 @@ def get_image_info(
                 MessageFormatter.file_not_found(input_path)
             )
 
-        # 创建提取器实例（所有分析功能默认启用）
-        extractor = ImageInfoExtractor()
+        normalized_detail = detail.strip().lower()
+        if normalized_detail not in {"basic", "summary", "full"}:
+            return MCPResponseBuilder.validation_error(
+                'detail 必须是 "basic"、"summary" 或 "full"', "detail"
+            )
+
+        extractor = _resolve_extractor(
+            normalized_detail,
+            include_histogram=include_histogram,
+            include_analysis=include_analysis,
+        )
 
         # 提取元数据
         metadata = extractor.extract(input_path_obj)
-
-        # 构建返回数据
-        result = {
-            "success": True,
-            "file_path": str(metadata.basic_info.file_path),
-            "file_size": metadata.basic_info.file_size,
-            "file_size_human": metadata.get_file_size_human(),
-            "format": metadata.basic_info.format,
-            "mode": metadata.basic_info.mode,
-            "width": metadata.basic_info.width,
-            "height": metadata.basic_info.height,
-            "aspect_ratio": metadata.basic_info.aspect_ratio,
-            "total_pixels": metadata.basic_info.total_pixels,
-            "orientation": metadata.basic_info.orientation,
-            "has_transparency": metadata.basic_info.has_transparency,
-            "is_animated": metadata.basic_info.is_animated,
-            "frame_count": metadata.basic_info.frame_count,
-        }
-
-        # 添加EXIF数据（如果存在）
-        if metadata.exif_data:
-            result["exif"] = {
-                "camera_make": metadata.exif_data.camera_make,
-                "camera_model": metadata.exif_data.camera_model,
-                "lens_model": metadata.exif_data.lens_model,
-                "datetime_original": metadata.exif_data.datetime_original.isoformat()
-                if metadata.exif_data.datetime_original
-                else None,
-                "datetime_digitized": metadata.exif_data.datetime_digitized.isoformat()
-                if metadata.exif_data.datetime_digitized
-                else None,
-                "gps_latitude": metadata.exif_data.gps_latitude,
-                "gps_longitude": metadata.exif_data.gps_longitude,
-                "iso": metadata.exif_data.iso,  # 修正字段名
-                "aperture": metadata.exif_data.aperture,
-                "shutter_speed": metadata.exif_data.shutter_speed,
-                "focal_length": metadata.exif_data.focal_length,
-                "flash": metadata.exif_data.flash,
-                "white_balance": metadata.exif_data.white_balance,
-                "exposure_mode": metadata.exif_data.exposure_mode,
-                "metering_mode": metadata.exif_data.metering_mode,  # 修正字段名
-            }
-
-        # 添加ICC配置文件信息（如果存在）
-        if metadata.icc_profile:
-            result["icc_profile"] = {
-                "profile_description": metadata.icc_profile.profile_description,
-                "color_space": metadata.icc_profile.color_space,
-                "profile_size": metadata.icc_profile.profile_size,
-            }
-
-        # 添加直方图数据（如果启用）
-        if metadata.histogram:
-            result["histogram"] = {
-                "red_histogram": metadata.histogram.red_histogram,
-                "green_histogram": metadata.histogram.green_histogram,
-                "blue_histogram": metadata.histogram.blue_histogram,
-                "luminance_histogram": metadata.histogram.luminance_histogram,
-                "brightness_stats": metadata.histogram.brightness_stats,
-            }
-
-        # 添加复杂度分析（如果启用）
-        if metadata.complexity:
-            result["complexity"] = {
-                "edge_density": metadata.complexity.edge_density,
-                "color_diversity": metadata.complexity.color_diversity,
-                "texture_complexity": metadata.complexity.texture_complexity,
-                "compression_difficulty": metadata.complexity.compression_difficulty,
-                "overall_complexity": metadata.complexity.overall_complexity,
-            }
-
-        return result
+        return _format_image_info_response(metadata)
 
     except (ValueError, FileNotFoundError) as e:
         logger.error(MessageFormatter.operation_failed("路径处理", input_path, e))
@@ -394,6 +348,123 @@ def get_image_info(
         return MCPResponseBuilder.processing_error(str(e), "图片信息获取")
 
 
+def _resolve_extractor(
+    detail: str,
+    *,
+    include_histogram: bool | None,
+    include_analysis: bool | None,
+) -> ImageInfoExtractor:
+    """根据请求粒度选择图片信息提取器。"""
+    if include_histogram is None and include_analysis is None:
+        if detail == "basic":
+            return lightweight_image_info_extractor
+        if detail == "summary":
+            return summary_image_info_extractor
+        return image_info_extractor
+
+    return _build_extractor(
+        detail=detail,
+        include_histogram=include_histogram,
+        include_analysis=include_analysis,
+    )
+
+
+@lru_cache(maxsize=12)
+def _build_extractor(
+    *,
+    detail: str,
+    include_histogram: bool | None,
+    include_analysis: bool | None,
+) -> ImageInfoExtractor:
+    """缓存自定义图片信息提取器。"""
+    return ImageInfoExtractor(
+        include_exif=detail != "basic",
+        include_icc=detail != "basic",
+        include_xmp=detail == "full",
+        include_histogram=include_histogram
+        if include_histogram is not None
+        else detail == "full",
+        include_complexity=include_analysis
+        if include_analysis is not None
+        else detail != "basic",
+    )
+
+
+def _format_image_info_response(metadata: ImageMetadata) -> MCPImageInfoResponse:
+    """格式化图片信息响应。"""
+    basic = metadata.basic_info
+    result: MCPImageInfoResponse = {
+        "success": True,
+        "file_path": str(basic.file_path),
+        "file_size": basic.file_size,
+        "file_size_human": metadata.get_file_size_human(),
+        "format": basic.format,
+        "mode": basic.mode,
+        "width": basic.width,
+        "height": basic.height,
+        "aspect_ratio": basic.aspect_ratio,
+        "total_pixels": basic.total_pixels,
+        "orientation": basic.orientation,
+        "has_transparency": basic.has_transparency,
+        "is_animated": basic.is_animated,
+        "frame_count": basic.frame_count,
+    }
+
+    if metadata.exif_data:
+        exif = metadata.exif_data
+        result["exif"] = {
+            "camera_make": exif.camera_make,
+            "camera_model": exif.camera_model,
+            "lens_model": exif.lens_model,
+            "datetime_original": exif.datetime_original.isoformat()
+            if exif.datetime_original
+            else None,
+            "datetime_digitized": exif.datetime_digitized.isoformat()
+            if exif.datetime_digitized
+            else None,
+            "gps_latitude": exif.gps_latitude,
+            "gps_longitude": exif.gps_longitude,
+            "iso": exif.iso,
+            "aperture": exif.aperture,
+            "shutter_speed": exif.shutter_speed,
+            "focal_length": exif.focal_length,
+            "flash": exif.flash,
+            "white_balance": exif.white_balance,
+            "exposure_mode": exif.exposure_mode,
+            "metering_mode": exif.metering_mode,
+        }
+
+    if metadata.icc_profile:
+        icc_profile = metadata.icc_profile
+        result["icc_profile"] = {
+            "profile_description": icc_profile.profile_description,
+            "color_space": icc_profile.color_space,
+            "profile_size": icc_profile.profile_size,
+        }
+
+    if metadata.histogram:
+        histogram = metadata.histogram
+        result["histogram"] = {
+            "red_histogram": histogram.red_histogram,
+            "green_histogram": histogram.green_histogram,
+            "blue_histogram": histogram.blue_histogram,
+            "luminance_histogram": histogram.luminance_histogram,
+            "brightness_stats": histogram.brightness_stats,
+        }
+
+    if metadata.complexity:
+        complexity = metadata.complexity
+        result["complexity"] = {
+            "edge_density": complexity.edge_density,
+            "color_diversity": complexity.color_diversity,
+            "texture_complexity": complexity.texture_complexity,
+            "compression_difficulty": complexity.compression_difficulty,
+            "overall_complexity": complexity.overall_complexity,
+        }
+
+    return result
+
+
 # ============================================================================
 # 应用入口
 # ============================================================================
@@ -402,7 +473,7 @@ def get_image_info(
 def main() -> None:
     """启动 MCP 服务器"""
     logger.info("启动图片压缩 MCP 服务器")
-    mcp.run()
+    mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

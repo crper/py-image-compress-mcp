@@ -4,6 +4,7 @@
 """
 
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 from PIL import Image
@@ -15,6 +16,12 @@ from py_image_compress_mcp.core.optimizer import CompressionOptimizer
 from py_image_compress_mcp.core.strategy import CompressionStrategy, StrategyType
 from py_image_compress_mcp.models.compression_config import QualityMode
 from tests.conftest import create_config
+
+
+class JPEGCaseResult(TypedDict):
+    size: int
+    ratio: float
+    params: dict[str, object]
 
 
 class TestCompressionEngine:
@@ -333,6 +340,28 @@ class TestUtils:
         for file_path in found_files:
             assert file_path.suffix.lower() in supported_extensions
 
+    def test_find_image_files_excludes_nested_output_paths(self, temp_dir: Path):
+        """测试按路径前缀排除嵌套输出目录。"""
+        from py_image_compress_mcp.utils import find_image_files
+
+        source_dir = temp_dir / "downloads"
+        source_dir.mkdir()
+        output_root = source_dir / "minify-img"
+        nested_output_dir = output_root / "batch-webp"
+        nested_output_dir.mkdir(parents=True)
+
+        source_image = source_dir / "source.png"
+        excluded_image = output_root / "previous.png"
+        nested_excluded_image = nested_output_dir / "generated.webp"
+
+        Image.new("RGB", (32, 32), color="red").save(source_image)
+        Image.new("RGB", (32, 32), color="blue").save(excluded_image)
+        Image.new("RGB", (32, 32), color="green").save(nested_excluded_image)
+
+        found_files = list(find_image_files(source_dir, exclude_paths=[output_root]))
+
+        assert found_files == [source_image]
+
 
 class TestJPEGOptimization:
     """JPEG优化参数测试"""
@@ -350,11 +379,12 @@ class TestJPEGOptimization:
 
         if not jpeg_image:
             pytest.skip("没有找到JPEG测试图片")
+        assert jpeg_image is not None
 
         original_size = jpeg_image.stat().st_size
 
         # 测试不同的参数组合
-        test_cases = [
+        test_cases: list[tuple[str, dict[str, object]]] = [
             ("无参数", {}),
             ("仅optimize", {"optimize": True}),
             ("质量75", {"quality": 75}),
@@ -362,7 +392,7 @@ class TestJPEGOptimization:
             ("质量85+optimize", {"quality": 85, "optimize": True}),
         ]
 
-        results = {}
+        results: dict[str, JPEGCaseResult] = {}
 
         with Image.open(jpeg_image) as img:
             for name, params in test_cases:
@@ -380,7 +410,7 @@ class TestJPEGOptimization:
                 results[name] = {
                     "size": compressed_size,
                     "ratio": compression_ratio,
-                    "params": params,
+                    "params": dict(params),
                 }
 
         # 验证optimize参数的效果
@@ -406,6 +436,7 @@ class TestJPEGOptimization:
 
         if not jpeg_image:
             pytest.skip("没有找到JPEG测试图片")
+        assert jpeg_image is not None
 
         original_size = jpeg_image.stat().st_size
 
@@ -450,6 +481,7 @@ class TestCompressionOptimizer:
 
         if not jpeg_image:
             pytest.skip("没有找到JPEG测试图片")
+        assert jpeg_image is not None
 
         # 创建无损配置
         config = create_config(

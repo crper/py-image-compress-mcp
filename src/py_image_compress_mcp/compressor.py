@@ -7,6 +7,7 @@
 from pathlib import Path
 from typing import Any
 
+from .config import get_default_max_workers
 from .core.compression_engine import process_image
 from .engine.batch import BatchProcessor
 from .engine.config import ConfigBuilder
@@ -24,6 +25,8 @@ from .utils.logging_helpers import get_logger
 
 
 logger = get_logger()
+DEFAULT_EXCLUDE_DIRS = ["output", ".venv", "node_modules", ".git", "__pycache__"]
+DEFAULT_MULTI_OUTPUT_DIR = "output"
 
 
 class ImageCompressor:
@@ -35,7 +38,7 @@ class ImageCompressor:
 
     def __init__(
         self,
-        max_workers: int = 4,
+        max_workers: int | None = None,
         force_executor_type: str | None = None,
     ):
         """初始化压缩器。
@@ -45,7 +48,11 @@ class ImageCompressor:
             force_executor_type: 强制指定执行器类型 ('thread'/'process'/None为自动选择)
         """
         # 参数验证
-        if max_workers <= 0:
+        resolved_max_workers = (
+            get_default_max_workers() if max_workers is None else max_workers
+        )
+
+        if resolved_max_workers <= 0:
             raise ValidationError("max_workers 必须大于 0")
 
         if force_executor_type is not None and force_executor_type not in {
@@ -56,11 +63,11 @@ class ImageCompressor:
                 "force_executor_type 必须是 'thread', 'process' 或 None"
             )
 
-        self.max_workers = max_workers
+        self.max_workers = resolved_max_workers
         self.force_executor_type = force_executor_type
         self.config_builder = ConfigBuilder()
         self.batch_processor = BatchProcessor(
-            max_workers=max_workers,
+            max_workers=resolved_max_workers,
             force_executor_type=force_executor_type,
             config_builder=self.config_builder,
         )
@@ -102,7 +109,7 @@ class ImageCompressor:
 
         try:
             # 使用 ConfigBuilder 的验证和构建功能
-            config = self.config_builder.validate_and_build(
+            config = self.config_builder.build(
                 input_path=input_path,
                 output_path=output_path,
                 output_dir=output_dir,
@@ -231,34 +238,18 @@ class ImageCompressor:
     ) -> ProcessingResult:
         """统一的目录处理方法，支持单格式和多格式"""
         try:
-            # 标准化格式参数
-            format_list: list[str | None]
-            if isinstance(formats, str):
-                format_list = [formats]
-            elif isinstance(formats, list):
-                # 类型转换以匹配声明的类型
-                format_list = list(formats)
-            else:
-                # 智能选择，None 表示自动选择格式
-                format_list = [None]
+            format_list = self._normalize_universal_formats(formats)
 
             # 单格式处理（包括智能选择）
             if len(format_list) == 1:
-                result = self.batch_processor.process_directory(
-                    input_dir=input_path,
-                    output_dir=output,
+                result = self._process_directory_for_format(
+                    input_path=input_path,
+                    output=output,
+                    format_name=format_list[0],
                     quality=quality,
-                    format=format_list[0],
                     max_width=max_width,
                     max_height=max_height,
                     recursive=recursive,
-                    exclude_dirs=[
-                        "output",
-                        ".venv",
-                        "node_modules",
-                        ".git",
-                        "__pycache__",
-                    ],
                 )
                 return {"success": result.success, "result": result, "error": None}
 
@@ -273,21 +264,14 @@ class ImageCompressor:
 
             for fmt in validated_formats:
                 try:
-                    result = self.batch_processor.process_directory(
-                        input_dir=input_path,
-                        output_dir=output,
+                    result = self._process_directory_for_format(
+                        input_path=input_path,
+                        output=output,
+                        format_name=fmt,
                         quality=quality,
-                        format=fmt,
                         max_width=max_width,
                         max_height=max_height,
                         recursive=recursive,
-                        exclude_dirs=[
-                            "output",
-                            ".venv",
-                            "node_modules",
-                            ".git",
-                            "__pycache__",
-                        ],
                     )
                     all_results.extend(result.results)
                     if not result.success:
@@ -318,6 +302,39 @@ class ImageCompressor:
                 error_message=str(e),
             )
             return {"success": False, "result": error_result, "error": str(e)}
+
+    def _process_directory_for_format(
+        self,
+        *,
+        input_path: Path,
+        output: str | Path | None,
+        format_name: str | None,
+        quality: int | None,
+        max_width: int | None,
+        max_height: int | None,
+        recursive: bool,
+    ) -> BatchResult:
+        """按指定格式处理目录。"""
+        return self.batch_processor.process_directory(
+            input_dir=input_path,
+            output_dir=output,
+            quality=quality,
+            format=format_name,
+            max_width=max_width,
+            max_height=max_height,
+            recursive=recursive,
+            exclude_dirs=DEFAULT_EXCLUDE_DIRS.copy(),
+        )
+
+    def _normalize_universal_formats(
+        self, formats: list[str] | str | None
+    ) -> list[str | None]:
+        """标准化通用压缩格式参数。"""
+        if isinstance(formats, str):
+            return [formats]
+        if isinstance(formats, list):
+            return list(formats)
+        return [None]
 
     def compress_universal(
         self,
@@ -409,92 +426,31 @@ class ImageCompressor:
         max_height: int | None,
     ) -> CompressionResult | MultiFormatResult:
         """处理单个文件的通用压缩"""
-        # 使用 match-case 处理不同的格式类型
-        match formats:
-            case None | str() as single_format:
-                # 单个格式或无格式（智能选择）
-                return self.compress_image(
-                    input_path=input_path,
-                    output_path=output,
-                    format=single_format,
-                    quality=quality,
-                    max_width=max_width,
-                    max_height=max_height,
-                )
-            case list() as format_list if len(format_list) == 1:
-                # 单元素格式列表
-                return self.compress_image(
-                    input_path=input_path,
-                    output_path=output,
-                    format=format_list[0],
-                    quality=quality,
-                    max_width=max_width,
-                    max_height=max_height,
-                )
-            case list() as format_list if len(format_list) > 1:
-                # 多格式列表，需要输出目录
-                if output is None:
-                    output_dir = input_path.parent / "output"
-                else:
-                    output_dir = Path(output)
+        if not isinstance(formats, list) or len(formats) <= 1:
+            single_format = (
+                formats[0] if isinstance(formats, list) and formats else formats
+            )
+            if isinstance(single_format, list):
+                raise ValidationError("单文件压缩的输出格式必须是字符串或空值")
+            return self.compress_image(
+                input_path=input_path,
+                output_path=output,
+                format=single_format,
+                quality=quality,
+                max_width=max_width,
+                max_height=max_height,
+            )
 
-                # 直接返回 MultiFormatResult，保持 API 一致性
-                return self.compress_multi_format(
-                    input_path=input_path,
-                    output_dir=output_dir,
-                    formats=format_list,
-                    quality=quality,
-                    max_width=max_width,
-                    max_height=max_height,
-                )
-            case _:
-                # 其他情况，使用默认处理
-                return self.compress_image(
-                    input_path=input_path,
-                    output_path=output,
-                    quality=quality,
-                    max_width=max_width,
-                    max_height=max_height,
-                )
-
-
-# 现代化便捷函数
-
-
-def compress_universal(input_path: str | Path, **kwargs: Any) -> ProcessingResult:
-    """便捷的通用压缩函数
-
-    使用现代化的通用处理器，自动识别文件或目录并进行相应处理。
-
-    Args:
-        input_path: 输入路径（文件或文件夹）
-        **kwargs: 其他参数，包括：
-            - output: 输出路径（文件时为文件路径，文件夹时为输出目录）
-            - formats: 输出格式（支持字符串或列表）
-            - quality: 压缩质量 1-100
-            - max_width: 最大宽度
-            - max_height: 最大高度
-            - recursive: 是否递归处理（默认True）
-
-    Returns:
-        ProcessingResult: 统一的处理结果格式
-
-    Examples:
-        >>> # 单文件压缩
-        >>> result = compress_universal("photo.jpg", quality=80)
-        >>> print(f"成功: {result['success']}")
-
-        >>> # 目录批量压缩
-        >>> result = compress_universal("photos/", formats=["JPEG", "WEBP"])
-        >>> print(f"处理了 {len(result['result'].results)} 个文件")
-    """
-    try:
-        compressor = ImageCompressor()
-        return compressor.compress_universal(input_path, **kwargs)
-    except Exception as e:
-        logger.error(f"便捷通用压缩函数失败: {e}")
-        # 使用 ErrorHandler 创建标准化的错误结果
-        error_result = ErrorHandler.handle_with_context(
-            e, Path(input_path), "便捷压缩函数", log_level="error"
+        output_dir = (
+            Path(output)
+            if output is not None
+            else input_path.parent / DEFAULT_MULTI_OUTPUT_DIR
         )
-        return {"success": False, "result": error_result, "error": str(e)}
+        return self.compress_multi_format(
+            input_path=input_path,
+            output_dir=output_dir,
+            formats=formats,
+            quality=quality,
+            max_width=max_width,
+            max_height=max_height,
+        )

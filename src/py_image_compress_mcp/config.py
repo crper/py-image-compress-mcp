@@ -4,8 +4,14 @@
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+
+def _detect_default_max_workers() -> int:
+    """根据当前机器能力推导默认并发数。"""
+    cpu_count = os.cpu_count() or 4
+    return max(1, min(cpu_count, 8))
 
 
 @dataclass(frozen=True)
@@ -23,7 +29,7 @@ class CompressionDefaults:
     COMPLEXITY_THRESHOLD: float = 0.7
 
     # 并发设置
-    MAX_WORKERS: int = 4
+    MAX_WORKERS: int = field(default_factory=_detect_default_max_workers)
 
     # 文件大小限制
     MAX_FILE_SIZE_MB: float = 100.0
@@ -112,7 +118,9 @@ class AppConfig:
             object.__setattr__(self.compression, "WEBP_QUALITY", int(webp_quality))
 
         if max_workers := os.getenv("PIC_MAX_WORKERS"):
-            object.__setattr__(self.compression, "MAX_WORKERS", int(max_workers))
+            object.__setattr__(
+                self.compression, "MAX_WORKERS", max(1, int(max_workers))
+            )
 
         # 日志配置
         if log_level := os.getenv("PIC_LOG_LEVEL"):
@@ -145,6 +153,11 @@ config = AppConfig()
 def get_config() -> AppConfig:
     """获取全局配置实例"""
     return config
+
+
+def get_default_max_workers() -> int:
+    """获取默认并发数。"""
+    return get_config().compression.MAX_WORKERS
 
 
 def reset_config():
