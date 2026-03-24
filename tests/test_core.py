@@ -134,6 +134,186 @@ class TestCompressionEngine:
         assert not result.success
         assert result.error is not None
 
+    def test_process_image_skips_highly_compressed_large_jpeg_recompression(
+        self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """测试高压缩大 JPEG 在同格式重编码时会提前跳过。"""
+        source = temp_dir / "dense-large.jpg"
+        Image.new("RGB", (3000, 2000), color="white").save(
+            source, "JPEG", quality=35, optimize=True
+        )
+
+        config = create_config(
+            input_path=source,
+            output_dir=temp_dir / "out",
+            quality_mode=QualityMode.CUSTOM,
+            custom_quality=80,
+        )
+
+        def fail_if_save_called(*args, **kwargs):
+            raise AssertionError("expected early skip before encoding")
+
+        monkeypatch.setattr(Image.Image, "save", fail_if_save_called)
+
+        result = process_image(config)
+
+        assert result.success
+        assert result.format_used == "SKIPPED"
+        assert result.output_path.exists()
+        assert result.compressed_size == result.original_size
+
+    def test_process_image_skips_small_simple_webp_recompression(
+        self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """测试小型简单 WebP 在同格式重编码时会提前跳过。"""
+        source = temp_dir / "simple.webp"
+        Image.new("RGB", (480, 480), color="white").save(source, "WEBP", quality=80)
+
+        config = create_config(
+            input_path=source,
+            output_dir=temp_dir / "out",
+            quality_mode=QualityMode.CUSTOM,
+            custom_quality=80,
+        )
+
+        def fail_if_save_called(*args, **kwargs):
+            raise AssertionError("expected early skip before encoding")
+
+        monkeypatch.setattr(Image.Image, "save", fail_if_save_called)
+
+        result = process_image(config)
+
+        assert result.success
+        assert result.format_used == "SKIPPED"
+        assert result.output_path.exists()
+        assert result.compressed_size == result.original_size
+
+    def test_process_image_still_recompresses_detailed_jpeg(
+        self, temp_dir: Path
+    ):
+        """测试有收益的 JPEG 仍会继续压缩，不会被误跳过。"""
+        source = temp_dir / "detailed.jpg"
+        detailed = Image.effect_noise((850, 478), 100).convert("RGB")
+        detailed.save(source, "JPEG", quality=95)
+
+        config = create_config(
+            input_path=source,
+            output_dir=temp_dir / "out",
+            quality_mode=QualityMode.CUSTOM,
+            custom_quality=80,
+        )
+
+        result = process_image(config)
+
+        assert result.success
+        assert result.format_used == "JPEG"
+        assert result.output_path.exists()
+        assert result.compressed_size < result.original_size
+
+    def test_process_image_skips_explicit_same_format_jpeg_when_likely_negative(
+        self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """测试显式 JPEG->JPEG 中等质量重编码也会跳过高概率负优化场景。"""
+        source = temp_dir / "dense-explicit.jpg"
+        Image.new("RGB", (3000, 2000), color="white").save(
+            source, "JPEG", quality=35, optimize=True
+        )
+
+        config = create_config(
+            input_path=source,
+            output_dir=temp_dir / "out",
+            quality_mode=QualityMode.CUSTOM,
+            custom_quality=80,
+            target_format="JPEG",
+        )
+
+        def fail_if_save_called(*args, **kwargs):
+            raise AssertionError("expected explicit same-format JPEG skip before encoding")
+
+        monkeypatch.setattr(Image.Image, "save", fail_if_save_called)
+
+        result = process_image(config)
+
+        assert result.success
+        assert result.format_used == "SKIPPED"
+        assert result.output_path.exists()
+        assert result.compressed_size == result.original_size
+
+    def test_process_image_does_not_skip_explicit_same_format_jpeg_with_real_gain(
+        self, temp_dir: Path
+    ):
+        """测试显式 JPEG->JPEG 对高密度细节图仍继续压缩。"""
+        source = temp_dir / "detailed-explicit.jpg"
+        detailed = Image.effect_noise((850, 478), 100).convert("RGB")
+        detailed.save(source, "JPEG", quality=95)
+
+        config = create_config(
+            input_path=source,
+            output_dir=temp_dir / "out",
+            quality_mode=QualityMode.CUSTOM,
+            custom_quality=80,
+            target_format="JPEG",
+        )
+
+        result = process_image(config)
+
+        assert result.success
+        assert result.format_used == "JPEG"
+        assert result.output_path.exists()
+        assert result.compressed_size < result.original_size
+
+    def test_process_image_same_path_fallback_returns_success(
+        self, temp_dir: Path
+    ):
+        """测试 fallback 命中时允许 output_path 与 input_path 相同。"""
+        source = temp_dir / "same-path-fallback.jpg"
+        Image.new("RGB", (100, 100), color="white").save(
+            source, "JPEG", quality=35, optimize=True
+        )
+
+        config = create_config(
+            input_path=source,
+            output_path=source,
+            quality_mode=QualityMode.CUSTOM,
+            custom_quality=80,
+            target_format="JPEG",
+        )
+
+        result = process_image(config)
+
+        assert result.success
+        assert result.error is None
+        assert result.output_path == source
+        assert result.compressed_size == result.original_size
+
+    def test_process_image_same_path_skip_returns_success(
+        self, temp_dir: Path
+    ):
+        """测试 skip 命中时允许 output_path 与 input_path 相同。"""
+        source = temp_dir / "same-path-skip.jpg"
+        Image.new("RGB", (3000, 2000), color="white").save(
+            source, "JPEG", quality=35, optimize=True
+        )
+
+        config = create_config(
+            input_path=source,
+            output_path=source,
+            quality_mode=QualityMode.CUSTOM,
+            custom_quality=80,
+            target_format="JPEG",
+        )
+
+        result = process_image(config)
+
+        assert result.success
+        assert result.error is None
+        assert result.output_path == source
+        assert result.compressed_size == result.original_size
+        assert result.skipped is True
+        assert isinstance(result.note, str)
+        assert result.note
+        assert result.is_successful()
+
 
 class TestImageInfoExtractor:
     """图片信息提取器测试"""

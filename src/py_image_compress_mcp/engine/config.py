@@ -153,18 +153,26 @@ class ConfigBuilder:
     ) -> list[str]:
         """验证并标准化格式列表，从 compressor.py 移入"""
         validated_formats = []
+        invalid_formats: list[str] = []
 
         for fmt in formats:
             if not fmt or not fmt.strip():
+                invalid_formats.append(fmt)
                 continue
 
             try:
                 normalized_format = CompressionValidators.validate_format(fmt)
                 if normalized_format not in validated_formats:
                     validated_formats.append(normalized_format)
-            except Exception as e:
-                logger.warning(f"跳过不支持的格式 {fmt}: {e}")
+            except Exception:
+                invalid_formats.append(fmt)
                 continue
+
+        if invalid_formats:
+            invalid_list = ", ".join(invalid_formats)
+            raise CustomValidationError(
+                f"存在不支持的输出格式: {invalid_list}", input_path
+            )
 
         if not validated_formats:
             raise CustomValidationError("没有有效的输出格式", input_path)

@@ -35,6 +35,12 @@ FAST_INFO_EXTRACTOR = ImageInfoExtractor(
 FORMAT_PROCESSOR = FormatProcessor()
 STRATEGY = CompressionStrategy()
 OPTIMIZER = CompressionOptimizer()
+JPEG_REENCODE_SKIP_MIN_PIXELS = 2_000_000
+JPEG_REENCODE_SKIP_MAX_BYTES_PER_PIXEL = 0.08
+WEBP_REENCODE_SKIP_MAX_FILE_SIZE = 32 * 1024
+WEBP_REENCODE_SKIP_MAX_PIXELS = 512 * 512
+REENCODE_SKIP_MIN_QUALITY = 80
+EXPLICIT_JPEG_SKIP_MAX_QUALITY = 80
 
 
 def process_image(config: CompressionConfig) -> CompressionResult:
@@ -71,8 +77,21 @@ def process_image(config: CompressionConfig) -> CompressionResult:
             config = _apply_strategy_decision(config, decision)
         # 用户明确指定了参数，跳过智能策略，直接压缩
 
+        target_format = _resolve_target_format(config, metadata)
+        _validate_output_path(config.get_output_path(config.input_path))
+        skip_reason = _get_preemptive_skip_reason(config, metadata, target_format)
+        if skip_reason is not None:
+            logger.info("跳过同格式重编码 %s: %s", config.input_path, skip_reason)
+            return _create_skip_result(config, skip_reason)
+
         # 执行压缩
-        return _compress_image(config, metadata, FORMAT_PROCESSOR, OPTIMIZER)
+        return _compress_image(
+            config,
+            metadata,
+            FORMAT_PROCESSOR,
+            OPTIMIZER,
+            target_format=target_format,
+        )
 
     except Exception as e:
         # 统一的异常处理，确保总是返回 CompressionResult
@@ -88,17 +107,14 @@ def _compress_image(
     metadata: ImageMetadata,
     format_processor: FormatProcessor,
     optimizer: CompressionOptimizer,
+    *,
+    target_format: str,
 ) -> CompressionResult:
     """执行图片压缩"""
     original_size = metadata.basic_info.file_size
     output_path = config.get_output_path(config.input_path)
     _validate_output_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 确定目标格式
-    target_format = config.target_format or metadata.basic_info.format
-    if target_format == "UNKNOWN":
-        target_format = "JPEG"
 
     # 处理图片并保存
     with Image.open(config.input_path) as img:
@@ -151,6 +167,76 @@ def _compress_image(
             final_dimensions=processed_img.size,
             error=None,
         )
+
+
+def _resolve_target_format(config: CompressionConfig, metadata: ImageMetadata) -> str:
+    """解析本次压缩实际使用的目标格式。"""
+    target_format = config.target_format or metadata.basic_info.format
+    if target_format == "UNKNOWN":
+        return "JPEG"
+    return target_format
+
+
+def _get_preemptive_skip_reason(
+    config: CompressionConfig,
+    metadata: ImageMetadata,
+    target_format: str,
+) -> str | None:
+    """在真正编码前拦截高概率负优化的同格式重编码。"""
+    if config.quality_mode != QualityMode.CUSTOM or config.should_resize:
+        return None
+
+    source_format = metadata.basic_info.format
+    if source_format != target_format:
+        return None
+
+    requested_quality = config.effective_quality
+    if requested_quality is None or requested_quality < REENCODE_SKIP_MIN_QUALITY:
+        return None
+
+    if config.target_format is not None:
+        if (
+            target_format == "JPEG"
+            and requested_quality <= EXPLICIT_JPEG_SKIP_MAX_QUALITY
+            and _should_skip_jpeg_reencode(metadata)
+        ):
+            return "JPEG 已经是高压缩密度的大图，跳过显式同格式重编码"
+        return None
+
+    if target_format == "JPEG" and _should_skip_jpeg_reencode(metadata):
+        return "JPEG 已经是高压缩密度的大图，跳过同格式重编码"
+
+    if target_format == "WEBP" and _should_skip_webp_reencode(metadata):
+        return "WebP 已经是简单小图，跳过同格式重编码"
+
+    return None
+
+
+def _should_skip_jpeg_reencode(metadata: ImageMetadata) -> bool:
+    """判断 JPEG 同格式重编码是否大概率属于负优化。"""
+    basic = metadata.basic_info
+    total_pixels = max(1, basic.total_pixels)
+    bytes_per_pixel = basic.file_size / total_pixels
+
+    return bool(
+        total_pixels >= JPEG_REENCODE_SKIP_MIN_PIXELS
+        and bytes_per_pixel <= JPEG_REENCODE_SKIP_MAX_BYTES_PER_PIXEL
+    )
+
+
+def _should_skip_webp_reencode(metadata: ImageMetadata) -> bool:
+    """判断简单小型 WebP 的同格式重编码是否值得跳过。"""
+    basic = metadata.basic_info
+    complexity = metadata.complexity
+
+    if basic.file_size > WEBP_REENCODE_SKIP_MAX_FILE_SIZE:
+        return False
+    if basic.total_pixels > WEBP_REENCODE_SKIP_MAX_PIXELS:
+        return False
+    if complexity is None:
+        return False
+
+    return bool(complexity.color_diversity <= 0.12)
 
 
 def _process_image(
@@ -218,7 +304,8 @@ def _post_process_result(
             f"压缩导致文件增大 {(compressed_size / original_size - 1) * 100:.1f}%，"
             f"强制回退到原文件（阈值: {(fallback_threshold - 1) * 100:.1f}%）"
         )
-        shutil.copy2(config.input_path, output_path)
+        if not _paths_refer_to_same_file(config.input_path, output_path):
+            shutil.copy2(config.input_path, output_path)
         compressed_size = original_size
         return output_path, compressed_size
 
@@ -302,8 +389,9 @@ def _create_skip_result(config: CompressionConfig, reason: str) -> CompressionRe
     # 直接复制原文件到输出位置
     output_path = config.get_output_path(config.input_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    shutil.copy2(config.input_path, output_path)
+    note = f"跳过压缩: {reason}"
+    if not _paths_refer_to_same_file(config.input_path, output_path):
+        shutil.copy2(config.input_path, output_path)
 
     file_size = config.input_path.stat().st_size
 
@@ -314,12 +402,22 @@ def _create_skip_result(config: CompressionConfig, reason: str) -> CompressionRe
         compressed_size=file_size,
         success=True,
         format_used="SKIPPED",
-        error=f"跳过压缩: {reason}",
+        error=None,
+        skipped=True,
+        note=note,
         quality_used=None,
         was_resized=False,
         original_dimensions=None,
         final_dimensions=None,
     )
+
+
+def _paths_refer_to_same_file(first_path: Path, second_path: Path) -> bool:
+    """判断两个路径是否实际指向同一文件。"""
+    try:
+        return first_path.resolve() == second_path.resolve()
+    except OSError:
+        return first_path == second_path
 
 
 # PNG量化相关函数已移除，简化PNG处理逻辑

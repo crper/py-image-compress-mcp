@@ -4,6 +4,7 @@
 """
 
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,16 @@ from .utils.message_formatter import MessageFormatter
 # MCP 服务器响应类型定义
 MCPCompressionResponse = dict[str, Any]
 MCPImageInfoResponse = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ServerServices:
+    """MCP 服务器依赖容器。"""
+
+    compressor: ImageCompressor
+    image_info_extractor: ImageInfoExtractor
+    lightweight_image_info_extractor: ImageInfoExtractor
+    summary_image_info_extractor: ImageInfoExtractor
 
 
 class MCPResponseBuilder:
@@ -107,38 +118,54 @@ class MCPResponseBuilder:
         )
 
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 创建MCP应用
-mcp: FastMCP[Any] = FastMCP(
-    name="py-image-compress",
-    instructions=(
-        "Compress local images and inspect image metadata. "
-        "Use compress_universal for file or directory workflows. "
-        "Use get_image_info when you need dimensions, transparency, EXIF, ICC, "
-        "or complexity details."
-    ),
-    dependencies=["pillow", "numpy", "humanize", "defusedxml"],
-)
+def build_services() -> ServerServices:
+    """构建 MCP 服务器使用的服务对象。"""
+    return ServerServices(
+        compressor=ImageCompressor(),
+        image_info_extractor=ImageInfoExtractor(),
+        lightweight_image_info_extractor=ImageInfoExtractor(
+            include_exif=False,
+            include_icc=False,
+            include_xmp=False,
+            include_histogram=False,
+            include_complexity=False,
+        ),
+        summary_image_info_extractor=ImageInfoExtractor(
+            include_histogram=False,
+            include_xmp=False,
+        ),
+    )
 
-# 全局压缩器实例
-compressor = ImageCompressor()
 
-# 全局图片信息提取器实例
-image_info_extractor = ImageInfoExtractor()
-lightweight_image_info_extractor = ImageInfoExtractor(
-    include_exif=False,
-    include_icc=False,
-    include_xmp=False,
-    include_histogram=False,
-    include_complexity=False,
-)
-summary_image_info_extractor = ImageInfoExtractor(
-    include_histogram=False,
-    include_xmp=False,
-)
+@lru_cache(maxsize=1)
+def get_default_services() -> ServerServices:
+    """获取默认的服务对象集合。"""
+    return build_services()
+
+
+def _create_base_server() -> FastMCP[Any]:
+    """创建基础 MCP 应用实例。"""
+    return FastMCP(
+        name="py-image-compress",
+        instructions=(
+            "Compress local images and inspect image metadata. "
+            "Use compress_universal for file or directory workflows. "
+            "Use get_image_info when you need dimensions, transparency, EXIF, ICC, "
+            "or complexity details."
+        ),
+        dependencies=["pillow", "numpy", "humanize", "defusedxml"],
+    )
+
+
+# 创建默认 MCP 应用，保留现有导入兼容性。
+mcp: FastMCP[Any] = _create_base_server()
+
+
+def create_server() -> FastMCP[Any]:
+    """返回已注册 tools 的默认 MCP 应用实例。"""
+    return mcp
 
 
 # ============================================================================
@@ -179,7 +206,7 @@ def compress_universal(
         output_path_obj = Path(output_path) if output_path else None
 
         # 使用通用压缩器
-        result = compressor.compress_universal(
+        result = get_default_services().compressor.compress_universal(
             input_path=input_path_obj,
             output=output_path_obj,
             formats=formats,
@@ -188,11 +215,13 @@ def compress_universal(
             max_height=max_height,
             recursive=recursive,
         )
+        formatted_result = _format_universal_result(result["result"])
+        error_message = result.get("error") or _extract_result_error(result["result"])
 
         return {
             "success": result["success"],
-            "result": _format_universal_result(result["result"]),
-            "error": result.get("error"),
+            "result": formatted_result,
+            "error": error_message,
         }
 
     except (ValueError, FileNotFoundError) as e:
@@ -223,6 +252,15 @@ def _format_universal_result(result: Any) -> dict[str, Any]:
     }
 
 
+def _extract_result_error(
+    result: BatchResult | CompressionResult | MultiFormatResult | Any,
+) -> str | None:
+    """从领域结果对象提取统一错误信息。"""
+    if isinstance(result, BatchResult | CompressionResult | MultiFormatResult):
+        return result.error
+    return None
+
+
 def _format_compression_result(result: CompressionResult) -> dict[str, Any]:
     """格式化单文件压缩结果。"""
     return {
@@ -237,6 +275,8 @@ def _format_compression_result(result: CompressionResult) -> dict[str, Any]:
         "size_saved": result.get_size_saved(),
         "summary": result.get_summary(),
         "success": result.success,
+        "skipped": result.skipped,
+        "note": result.note,
         "error": result.error,
     }
 
@@ -247,6 +287,8 @@ def _format_batch_result(result: BatchResult) -> dict[str, Any]:
         "type": "batch",
         "input_dir": str(result.input_dir),
         "output_dir": str(result.output_dir),
+        "success": result.success,
+        "error": result.error,
         "total_files": result.get_total_count(),
         "successful_files": result.get_success_count(),
         "failed_files": result.get_failure_count(),
@@ -262,6 +304,8 @@ def _format_multi_format_result(result: MultiFormatResult) -> dict[str, Any]:
     return {
         "type": "multi_format",
         "input_path": str(result.input_path),
+        "success": result.success,
+        "error": result.error,
         "total_formats": len(result.results),
         "successful_formats": sum(1 for item in result.results if item.success),
         "results": [
@@ -281,6 +325,8 @@ def _format_collection_item(result: CompressionResult) -> dict[str, Any]:
         "input_path": str(result.input_path),
         "output_path": str(result.output_path),
         "success": result.success,
+        "skipped": result.skipped,
+        "note": result.note,
         "format_used": result.format_used,
         "compression_ratio": result.get_compression_ratio() if result.success else 0,
         "size_saved": result.get_size_saved() if result.success else 0,
@@ -355,12 +401,14 @@ def _resolve_extractor(
     include_analysis: bool | None,
 ) -> ImageInfoExtractor:
     """根据请求粒度选择图片信息提取器。"""
+    services = get_default_services()
+
     if include_histogram is None and include_analysis is None:
         if detail == "basic":
-            return lightweight_image_info_extractor
+            return services.lightweight_image_info_extractor
         if detail == "summary":
-            return summary_image_info_extractor
-        return image_info_extractor
+            return services.summary_image_info_extractor
+        return services.image_info_extractor
 
     return _build_extractor(
         detail=detail,
@@ -472,6 +520,7 @@ def _format_image_info_response(metadata: ImageMetadata) -> MCPImageInfoResponse
 
 def main() -> None:
     """启动 MCP 服务器"""
+    logging.basicConfig(level=logging.INFO)
     logger.info("启动图片压缩 MCP 服务器")
     mcp.run(transport="stdio")
 

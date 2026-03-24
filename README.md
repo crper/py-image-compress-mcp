@@ -16,6 +16,7 @@ The server is designed for local `stdio` use and follows the official Python MCP
 - Small API surface: two tools cover the main workflows
 - Safe output behavior: writes temp files first, then replaces the final output only when valid
 - Stable batch behavior: deterministic file discovery and ordered batch results
+- Conservative same-format behavior: skips likely negative recompression instead of wasting time re-encoding
 - Fast hot path: compression uses lightweight analysis instead of full metadata extraction
 
 ## Installation
@@ -81,6 +82,13 @@ Typical examples:
 - `compress_universal("photos/", output_path="compressed/", formats="WEBP", quality=80)`
 - `compress_universal("photo.png", output_path="out/", formats=["WEBP", "JPEG", "PNG"], quality=80)`
 
+Behavior notes:
+
+- `compress_universal` may short-circuit some same-format lossy requests such as `JPEG -> JPEG` or `WEBP -> WEBP` when the engine predicts a likely negative optimization.
+- In that case the server still returns `success: true`, copies the original bytes to the output path, and marks the file result with `format_used: "SKIPPED"`.
+- For MCP callers, the skip reason is exposed in the structured result via `skipped: true` and a human-readable `note` field.
+- The top-level `error` field is reserved for real failures and stays `null` for successful skips.
+
 ### `get_image_info`
 
 Inspect image metadata and analysis with three response levels. The default level is `summary`.
@@ -117,6 +125,8 @@ result = compressor.compress_universal(
 if result["success"]:
     print(result["result"].get_summary())
 ```
+
+For the Python API, a skipped same-format recompression still returns `success=True`. Inspect `result["result"].skipped` and `result["result"].note` if you need to distinguish a true re-encode from a conservative no-op copy.
 
 Direct single-file APIs are still available when you need more control:
 

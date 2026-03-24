@@ -72,6 +72,8 @@ class CompressionResult(BaseResult):
     quality_used: int | None = Field(None, description="使用的质量值")
 
     # 处理信息
+    skipped: bool = Field(False, description="是否跳过了实际压缩")
+    note: str | None = Field(None, description="非错误提示信息")
     was_resized: bool = Field(False, description="是否调整了尺寸")
     original_dimensions: tuple[int, int] | None = Field(None, description="原始尺寸")
     final_dimensions: tuple[int, int] | None = Field(None, description="最终尺寸")
@@ -99,6 +101,8 @@ class CompressionResult(BaseResult):
         """压缩结果摘要"""
         if not self.success:
             return f"失败: {self.error}"
+        if self.skipped:
+            return self.note or "跳过压缩"
 
         return (
             f"{self.get_original_size_human()} → {self.get_compressed_size_human()} "

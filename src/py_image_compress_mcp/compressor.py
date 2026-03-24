@@ -29,6 +29,17 @@ DEFAULT_EXCLUDE_DIRS = ["output", ".venv", "node_modules", ".git", "__pycache__"
 DEFAULT_MULTI_OUTPUT_DIR = "output"
 
 
+def _to_processing_result(
+    result: BatchResult | CompressionResult | MultiFormatResult,
+) -> ProcessingResult:
+    """把领域结果统一包装成带顶层错误语义的处理结果。"""
+    return {
+        "success": result.success,
+        "result": result,
+        "error": None if result.success else result.error,
+    }
+
+
 class ImageCompressor:
     """现代化图像压缩器。
 
@@ -251,7 +262,7 @@ class ImageCompressor:
                     max_height=max_height,
                     recursive=recursive,
                 )
-                return {"success": result.success, "result": result, "error": None}
+                return _to_processing_result(result)
 
             # 多格式处理 - 过滤掉 None 值
             non_none_formats = [f for f in format_list if f is not None]
@@ -291,7 +302,7 @@ class ImageCompressor:
             return {
                 "success": merged_result.success,
                 "result": merged_result,
-                "error": None,
+                "error": None if merged_result.success else merged_result.error,
             }
 
         except Exception as e:
@@ -372,7 +383,7 @@ class ImageCompressor:
                     result = self._process_single_file_universal(
                         path, output, formats, quality, max_width, max_height
                     )
-                    return {"success": result.success, "result": result, "error": None}
+                    return _to_processing_result(result)
 
                 case path if path.is_dir():
                     # 处理目录

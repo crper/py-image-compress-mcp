@@ -3,6 +3,7 @@
 专门处理批量图像压缩任务，支持并发和进度监控。
 """
 
+import re
 from pathlib import Path
 
 from ..core.compression_engine import process_image
@@ -18,6 +19,7 @@ from .config import ConfigBuilder
 
 
 logger = get_logger()
+_GENERATED_OUTPUT_PATTERN = re.compile(r"^(?P<base>.+?)_compress(?:_\d+)?$")
 
 
 class BatchProcessor:
@@ -93,6 +95,12 @@ class BatchProcessor:
                     exclude_paths=exclude_paths,
                 )
             )
+            if output_dir == input_dir:
+                image_files = [
+                    file_path
+                    for file_path in image_files
+                    if not self._is_generated_output(file_path)
+                ]
 
             if not image_files:
                 return self._create_empty_batch_result(input_dir, output_dir)
@@ -222,7 +230,7 @@ class BatchProcessor:
             input_dir=input_dir,
             output_dir=output_dir,
             results=[],
-            success=True,
+            success=False,
             error="未找到图像文件",
         )
 
@@ -254,3 +262,13 @@ class BatchProcessor:
                 error=None if success else "所有文件处理都失败",
             )
             return fallback_result
+
+    def _is_generated_output(self, file_path: Path) -> bool:
+        """判断文件是否是同目录自动生成的压缩产物。"""
+        match = _GENERATED_OUTPUT_PATTERN.match(file_path.stem)
+        if match is None:
+            return False
+
+        original_stem = match.group("base")
+        siblings = file_path.parent.glob(f"{original_stem}.*")
+        return any(sibling != file_path for sibling in siblings)

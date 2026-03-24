@@ -70,6 +70,7 @@ class TestMCPServer:
         """测试 MCP 核心工具 - 只有两个工具"""
         from py_image_compress_mcp.mcp_server import (
             compress_universal,
+            create_server,
             get_image_info,
             mcp,
         )
@@ -82,6 +83,8 @@ class TestMCPServer:
 
         tool_names = {tool.name for tool in asyncio.run(mcp.list_tools())}
         assert tool_names == {"compress_universal", "get_image_info"}
+        created_tool_names = {tool.name for tool in asyncio.run(create_server().list_tools())}
+        assert created_tool_names == {"compress_universal", "get_image_info"}
 
     def test_get_image_info_supports_lightweight_detail(
         self, sample_images: dict[str, Path]
@@ -121,6 +124,82 @@ class TestMCPServer:
         assert result["success"] is True
         assert "histogram" in result
         assert sum(result["histogram"]["red_histogram"]) == 1000 * 1000
+
+    def test_compress_universal_propagates_top_level_error(
+        self, sample_images: dict[str, Path], temp_dir: Path
+    ):
+        """测试 MCP 顶层错误字段会透传处理失败。"""
+        from py_image_compress_mcp.mcp_server import compress_universal
+
+        output_dir = temp_dir / "existing-output-dir"
+        output_dir.mkdir()
+
+        result = compress_universal(
+            input_path=str(sample_images["jpeg"]),
+            output_path=str(output_dir),
+            quality=80,
+            formats="JPEG",
+        )
+
+        assert result["success"] is False
+        assert isinstance(result["error"], str)
+        assert result["error"]
+
+    def test_compress_universal_empty_directory_returns_failure(self, temp_dir: Path):
+        """测试空目录压缩返回明确失败，而不是成功+错误并存。"""
+        from py_image_compress_mcp.mcp_server import compress_universal
+
+        empty_dir = temp_dir / "empty"
+        empty_dir.mkdir()
+
+        result = compress_universal(str(empty_dir))
+
+        assert result["success"] is False
+        assert result["error"] == "未找到图像文件"
+        assert result["result"]["total_files"] == 0
+
+    def test_compress_universal_rejects_invalid_format_list(
+        self, sample_images: dict[str, Path], temp_dir: Path
+    ):
+        """测试多格式请求遇到非法格式时直接失败。"""
+        from py_image_compress_mcp.mcp_server import compress_universal
+
+        result = compress_universal(
+            input_path=str(sample_images["jpeg"]),
+            output_path=str(temp_dir / "out"),
+            formats=["WEBP", "NOT_A_FORMAT"],
+            quality=80,
+        )
+
+        assert result["success"] is False
+        assert isinstance(result["error"], str)
+        assert "NOT_A_FORMAT" in result["error"]
+
+    def test_compress_universal_skip_uses_note_not_top_level_error(
+        self, temp_dir: Path
+    ):
+        """测试 skip 信息放在 note，而不是顶层 error。"""
+        from py_image_compress_mcp.mcp_server import compress_universal
+
+        image_path = temp_dir / "skip-note.jpg"
+        Image.new("RGB", (3000, 2000), color="white").save(
+            image_path, "JPEG", quality=35, optimize=True
+        )
+
+        result = compress_universal(
+            input_path=str(image_path),
+            output_path=str(temp_dir / "out.jpg"),
+            formats="JPEG",
+            quality=80,
+        )
+
+        assert result["success"] is True
+        assert result["error"] is None
+        assert result["result"]["success"] is True
+        assert result["result"]["error"] is None
+        assert result["result"]["skipped"] is True
+        assert isinstance(result["result"]["note"], str)
+        assert result["result"]["note"]
 
 
 class TestEndToEnd:
@@ -279,3 +358,36 @@ class TestEndToEnd:
 
         assert not result.success
         assert result.error is not None
+
+    def test_batch_processing_default_output_skips_generated_files_on_rerun(
+        self, temp_dir: Path
+    ):
+        """测试同目录重复运行时不会再次处理自动生成的压缩产物。"""
+        input_dir = temp_dir / "photos"
+        input_dir.mkdir()
+
+        source_image = input_dir / "source.png"
+        Image.new("RGB", (80, 80), color="red").save(source_image)
+
+        processor = BatchProcessor(max_workers=1, force_executor_type="thread")
+
+        first_result = processor.process_directory(
+            input_dir=input_dir,
+            output_dir=None,
+            quality=80,
+            format="JPEG",
+            recursive=False,
+        )
+        assert first_result.success
+        assert [item.input_path.name for item in first_result.results] == ["source.png"]
+
+        second_result = processor.process_directory(
+            input_dir=input_dir,
+            output_dir=None,
+            quality=80,
+            format="JPEG",
+            recursive=False,
+        )
+
+        assert second_result.success
+        assert [item.input_path.name for item in second_result.results] == ["source.png"]
