@@ -159,13 +159,8 @@ def _create_base_server() -> FastMCP[Any]:
     )
 
 
-# 创建默认 MCP 应用，保留现有导入兼容性。
+# 默认 MCP 应用实例。
 mcp: FastMCP[Any] = _create_base_server()
-
-
-def create_server() -> FastMCP[Any]:
-    """返回已注册 tools 的默认 MCP 应用实例。"""
-    return mcp
 
 
 # ============================================================================

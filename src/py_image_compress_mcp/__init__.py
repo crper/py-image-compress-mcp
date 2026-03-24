@@ -1,26 +1,8 @@
-"""现代化 Python 图像压缩库。
-
-基于 Pillow 11 现代 API 的高效图像压缩解决方案。
-"""
+"""py-image-compress-mcp 的最小公开接口。"""
 
 __version__ = "0.4.0"
-__author__ = "crper"
-__description__ = "现代化图像压缩库，基于 Pillow 11"
 
-# 核心功能导出
 from .compressor import ImageCompressor
-from .models.compression_result import BatchResult, CompressionResult, MultiFormatResult
 
 
-__all__ = [
-    "BatchResult",
-    "CompressionResult",
-    "ImageCompressor",
-    "MultiFormatResult",
-    "get_version",
-]
-
-
-def get_version() -> str:
-    """获取版本号。"""
-    return __version__
+__all__ = ["ImageCompressor", "__version__"]

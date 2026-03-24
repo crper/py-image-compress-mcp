@@ -166,13 +166,14 @@ def demo_compress_universal_tool():
 
     # 创建压缩器实例
     compressor = ImageCompressor()
+    single_output_path = output_dir / f"{test_image.stem}_single{test_image.suffix}"
 
     # 1. 单文件智能压缩
     print("\n1. 单文件智能压缩:")
     try:
         result = compressor.compress_universal(
             input_path=test_image,
-            output=output_dir,
+            output=single_output_path,
             quality=None,  # 无损压缩
         )
 

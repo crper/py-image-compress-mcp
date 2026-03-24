@@ -33,16 +33,16 @@ jobs:
 
       - name: Run linting
         run: |
-          uv run ruff check py_image_compress_mcp/ tests/
-          uv run ruff format --check py_image_compress_mcp/ tests/
+          uv run ruff check src tests examples scripts
+          uv run ruff format --check src tests examples scripts
 
       - name: Run type checking
         run: |
-          uv run mypy py_image_compress_mcp/
+          uv run mypy src tests
 
       - name: Run tests
         run: |
-          uv run pytest tests/ --cov=py_image_compress_mcp --cov-report=xml
+          uv run pytest tests/ --cov=src/py_image_compress_mcp --cov-report=xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
@@ -53,7 +53,7 @@ jobs:
 
       - name: Run examples
         run: |
-          make run-examples
+          make examples
 
   security:
     runs-on: ubuntu-latest
@@ -68,7 +68,7 @@ jobs:
 
       - name: Run security tests
         run: |
-          uv run python -m pytest tests/test_utils.py::TestUtils::test_validate_path_security_invalid -v
+          uv run pytest tests/test_integration.py::TestMCPServer::test_compress_universal_rejects_invalid_format_list -v
 
   build:
     needs: [test, security]

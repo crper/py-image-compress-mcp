@@ -70,7 +70,6 @@ class TestMCPServer:
         """测试 MCP 核心工具 - 只有两个工具"""
         from py_image_compress_mcp.mcp_server import (
             compress_universal,
-            create_server,
             get_image_info,
             mcp,
         )
@@ -83,8 +82,6 @@ class TestMCPServer:
 
         tool_names = {tool.name for tool in asyncio.run(mcp.list_tools())}
         assert tool_names == {"compress_universal", "get_image_info"}
-        created_tool_names = {tool.name for tool in asyncio.run(create_server().list_tools())}
-        assert created_tool_names == {"compress_universal", "get_image_info"}
 
     def test_get_image_info_supports_lightweight_detail(
         self, sample_images: dict[str, Path]

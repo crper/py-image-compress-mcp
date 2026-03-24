@@ -35,8 +35,6 @@ run:
 
 examples:
 	@echo "运行示例演示..."
-	uv run python examples/modern_demo.py
-	@echo ""
 	uv run python examples/mcp_usage.py
 
 clean:
