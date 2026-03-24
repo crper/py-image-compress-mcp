@@ -188,6 +188,7 @@ Recent API cleanup further narrowed the public surface:
 - `build_config()` was removed from `py_image_compress_mcp.engine.config`
 
 Use `ImageCompressor()` directly instead. The package root now guarantees only `ImageCompressor` and `__version__`.
+Internal helper modules and re-exports under `py_image_compress_mcp.*` should be treated as private implementation details.
 
 ## Development
 
@@ -207,7 +208,14 @@ Run the remaining example script directly when needed:
 uv run python examples/mcp_usage.py
 ```
 
-Validation currently used in this repo:
+Optional MCP smoke test:
+
+```bash
+# Use a directory that contains at least 5 images, including 3 PNG files.
+uv run python scripts/mcp_e2e_test.py --source-dir ~/Downloads --output-dir tmp/mcp-e2e
+```
+
+Quick local validation:
 
 ```bash
 uv run ruff check .

@@ -191,6 +191,7 @@ codex mcp get py-image-compress-local
 - `py_image_compress_mcp.engine.config.build_config` 已删除
 
 请改为显式使用 `ImageCompressor()`。当前包根级别稳定导出的只保留 `ImageCompressor` 和 `__version__`。
+`py_image_compress_mcp.*` 下的内部辅助模块和转发导出都应视为私有实现细节，不承诺兼容性。
 
 ## 开发
 
@@ -210,7 +211,14 @@ make examples
 uv run python examples/mcp_usage.py
 ```
 
-当前仓库使用的验证命令：
+可选的 MCP 烟雾测试：
+
+```bash
+# 请传入一个至少包含 5 张图片且其中有 3 张 PNG 的样本目录。
+uv run python scripts/mcp_e2e_test.py --source-dir ~/Downloads --output-dir tmp/mcp-e2e
+```
+
+本地快速验证命令：
 
 ```bash
 uv run ruff check .

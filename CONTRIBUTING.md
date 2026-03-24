@@ -16,7 +16,7 @@ git clone https://github.com/crper/py-image-compress-mcp.git
 cd py-image-compress-mcp
 
 # 2. Install dependencies
-uv sync --extra dev
+uv sync
 
 # 3. Install pre-commit hooks
 uv run pre-commit install
@@ -42,6 +42,10 @@ make benchmark
 
 # Run the MCP example script
 make examples
+
+# Optional MCP end-to-end smoke test
+# Requires a sample directory with at least 5 images, including 3 PNG files.
+uv run python scripts/mcp_e2e_test.py --source-dir ~/Downloads --output-dir tmp/mcp-e2e
 ```
 
 The CI workflow currently validates the repository with:
