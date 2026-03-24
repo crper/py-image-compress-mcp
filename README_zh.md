@@ -16,6 +16,7 @@
 - 工具少但覆盖核心场景：只有 2 个 MCP 工具
 - 输出安全：先写临时文件，验证通过后再替换正式输出
 - 批量结果稳定：文件发现顺序固定，返回顺序与输入一致
+- 保守的同格式重编码策略：高概率负优化时直接跳过，避免白白重编码
 - 热路径优化：压缩默认走轻量分析，不做全量元数据提取
 
 ## 安装
@@ -85,6 +86,13 @@ uv run mcp install src/py_image_compress_mcp/mcp_server.py
 - `compress_universal("photo.jpg", formats="WEBP", quality=82)`
 - `compress_universal("photos/", output_path="compressed/", formats="WEBP", quality=80)`
 - `compress_universal("photo.png", output_path="out/", formats=["WEBP", "JPEG", "PNG"], quality=80)`
+
+行为说明：
+
+- `compress_universal` 会在部分同格式有损请求中提前短路，比如 `JPEG -> JPEG` 或 `WEBP -> WEBP`，避免明显的负优化。
+- 发生这类跳过时，服务仍返回 `success: true`，并把原文件复制到输出路径，同时把结果中的 `format_used` 标记为 `"SKIPPED"`。
+- 对 MCP 调用方来说，跳过原因会通过结构化结果里的 `skipped: true` 和可读的 `note` 字段返回。
+- 顶层 `error` 字段只用于真实失败，成功跳过时保持为 `null`。
 
 ### `get_image_info`
 
@@ -168,14 +176,21 @@ codex mcp get py-image-compress-local
 }
 ```
 
+## 更多文档
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [PYPI_RELEASE.md](PYPI_RELEASE.md)
+
 ## 升级说明
 
-这轮 API 收敛删除了几个兼容入口：
+这轮 API 收敛进一步缩小了公开接口：
 
 - `from py_image_compress_mcp import compress_universal` 已删除
+- `from py_image_compress_mcp import BatchResult`、`CompressionResult`、`MultiFormatResult` 已删除
+- `py_image_compress_mcp.mcp_server.create_server` 已删除
 - `py_image_compress_mcp.engine.config.build_config` 已删除
 
-请改为显式使用 `ImageCompressor()`。
+请改为显式使用 `ImageCompressor()`。当前包根级别稳定导出的只保留 `ImageCompressor` 和 `__version__`。
 
 ## 开发
 
@@ -187,6 +202,12 @@ make test
 make typecheck
 make benchmark
 make examples
+```
+
+如果只想跑保留的示例脚本，可直接执行：
+
+```bash
+uv run python examples/mcp_usage.py
 ```
 
 当前仓库使用的验证命令：
@@ -217,7 +238,6 @@ uv run python scripts/benchmark.py
 - 传输方式：`stdio`
 - SDK：官方 `mcp[cli]`
 - 服务入口：[src/py_image_compress_mcp/mcp_server.py](/Users/linqunhe/code/self-github/projects/py-image-compress-mcp/src/py_image_compress_mcp/mcp_server.py)
-- 优化与基准报告：[OPTIMIZATION.md](/Users/linqunhe/code/self-github/projects/py-image-compress-mcp/OPTIMIZATION.md)
 
 ## License
 

@@ -173,14 +173,21 @@ Example configuration:
 }
 ```
 
+## More Docs
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [PYPI_RELEASE.md](PYPI_RELEASE.md)
+
 ## Upgrade Notes
 
-Recent API cleanup removed a few compatibility helpers:
+Recent API cleanup further narrowed the public surface:
 
 - `from py_image_compress_mcp import compress_universal` was removed
+- `from py_image_compress_mcp import BatchResult`, `CompressionResult`, and `MultiFormatResult` were removed
+- `py_image_compress_mcp.mcp_server.create_server` was removed
 - `build_config()` was removed from `py_image_compress_mcp.engine.config`
 
-Use `ImageCompressor()` directly instead.
+Use `ImageCompressor()` directly instead. The package root now guarantees only `ImageCompressor` and `__version__`.
 
 ## Development
 
@@ -192,6 +199,12 @@ make test
 make typecheck
 make benchmark
 make examples
+```
+
+Run the remaining example script directly when needed:
+
+```bash
+uv run python examples/mcp_usage.py
 ```
 
 Validation currently used in this repo:
@@ -222,7 +235,6 @@ The benchmark covers:
 - Transport: `stdio`
 - SDK: official `mcp[cli]`
 - Server entry: [src/py_image_compress_mcp/mcp_server.py](/Users/linqunhe/code/self-github/projects/py-image-compress-mcp/src/py_image_compress_mcp/mcp_server.py)
-- Optimization and benchmark report: [OPTIMIZATION.md](/Users/linqunhe/code/self-github/projects/py-image-compress-mcp/OPTIMIZATION.md)
 
 ## License
 

@@ -29,15 +29,19 @@ export UV_PUBLISH_TOKEN="pypi-your-production-token-here"
 ### 1. 发布前检查
 
 ```bash
-# 确保所有测试通过
-make ci
+# 确保校验和示例都通过
+uv run ruff check src tests examples scripts
+uv run ruff format --check src tests examples scripts
+uv run mypy src tests
+uv run pytest -q
+make examples
 
 # 检查版本一致性
-grep version pyproject.toml
-grep __version__ src/py_image_compress_mcp/__init__.py
+grep '^version' pyproject.toml
+uv run python -c "from py_image_compress_mcp import __version__; print(__version__)"
 
-# 更新 CHANGELOG.md 记录新版本变更
-# 如需要，更新 pyproject.toml 和 __init__.py 中的版本号
+# 如需要，更新 pyproject.toml 中的版本号
+# 如果你维护发布说明，再同步更新 GitHub Release 文案
 ```
 
 ### 2. 构建包
@@ -79,14 +83,15 @@ UV_PUBLISH_TOKEN="pypi-your-production-token" uv publish
 ### 5. 发布后操作
 
 ```bash
-# 创建 git 标签
-git tag v0.2.0
-git push origin v0.2.0
+# 创建 git 标签（以实际版本号为准）
+git tag vX.Y.Z
+git push origin vX.Y.Z
 
 # 从 PyPI 测试安装
 pip install py-image-compress-mcp
 
-# 测试 uvx 安装
+# 测试命令入口
+py-image-compress-mcp --version
 uvx py-image-compress-mcp --version
 ```
 
@@ -114,9 +119,7 @@ uv version 2.0.0 --dry-run
 
 # 手动更新（如果需要）
 # 1. 更新 pyproject.toml 中的 version
-# 2. 更新 src/py_image_compress_mcp/__init__.py 中的 __version__
-# 3. 更新 CHANGELOG.md 记录变更
-# 4. 提交变更后再构建
+# 2. 提交变更后再构建
 ```
 
 ## 故障排除
@@ -149,7 +152,6 @@ uv run python -c "import py_image_compress_mcp; print(py_image_compress_mcp.__ve
 
 # 验证入口点
 uv run py-image-compress-mcp --version
-uv run py-image-compress --help
 ```
 
 ## 安全注意事项
@@ -159,30 +161,15 @@ uv run py-image-compress --help
 - 考虑使用 GitHub Actions 进行自动化发布
 - 定期轮换 API 令牌
 
-## 自动化发布（可选）
+## 自动化发布（当前仓库）
 
-通过 GitHub Actions 自动发布，创建 `.github/workflows/release.yml`：
+当前仓库已经通过 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 在 GitHub Release 事件上执行构建和 `uv publish`。
 
-```yaml
-name: 发布到 PyPI
-on:
-  release:
-    types: [published]
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v1
-      - name: 构建并发布
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          uv build
-          uv publish
-```
+如果要继续使用这条自动化链路，请确认：
 
-在 GitHub 仓库密钥中添加 PyPI API 令牌，命名为 `PYPI_API_TOKEN`。
+- 仓库密钥里已配置 `PYPI_API_TOKEN`
+- Release 是从经过验证的提交创建的
+- 发布前已手动跑过“发布前检查”一节里的命令
 
 ## 高级配置
 
