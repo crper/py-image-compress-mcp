@@ -232,22 +232,6 @@ class ConfigBuilder:
                 upscale_allowed=kwargs.get("upscale_allowed", False),
             )
 
-        # 智能设置回退机制：
-        # 1. 无损模式默认启用
-        # 2. 现代格式转传统格式时启用（防止文件变大）
-        # 3. 其他情况根据用户设置
-        input_ext = input_path.suffix.lower()
-        is_modern_to_legacy = input_ext in {".webp", ".avif", ".heif"} and format in {
-            "JPEG",
-            "PNG",
-        }
-
-        default_fallback = (
-            True
-            if quality_mode == QualityMode.LOSSLESS or is_modern_to_legacy
-            else kwargs.get("fallback_to_original", False)
-        )
-
         # 构建主配置
         return CompressionConfig(
             input_path=input_path,
@@ -262,8 +246,6 @@ class ConfigBuilder:
             optimize=kwargs.get("optimize", True),
             progressive=kwargs.get("progressive", True),
             strip_metadata=kwargs.get("strip_metadata", False),
-            keep_orientation=kwargs.get("keep_orientation", True),
-            fallback_to_original=kwargs.get("fallback_to_original", default_fallback),
         )
 
     def _format_validation_error(self, error: PydanticValidationError) -> str:

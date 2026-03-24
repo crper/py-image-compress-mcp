@@ -3,7 +3,7 @@
 提供纯工具函数，不包含业务逻辑。
 """
 
-from .file_helpers import find_image_files, get_image_mime_type
+from .file_helpers import find_image_files
 from .logging_helpers import get_logger
 from .message_formatter import (
     MessageFormatter,
@@ -17,6 +17,5 @@ __all__ = [
     "find_image_files",
     "format_file_error",
     "format_validation_error",
-    "get_image_mime_type",
     "get_logger",
 ]

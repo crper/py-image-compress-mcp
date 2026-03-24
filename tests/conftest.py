@@ -137,13 +137,11 @@ def create_config(**kwargs):
         "quality_mode": QualityMode.LOSSLESS,
         "custom_quality": None,
         "target_format": None,
-        "target_formats": None,
         "preserve_format": True,
         "resize_config": None,
         "optimize": True,
         "progressive": True,
         "strip_metadata": False,
-        "fallback_to_original": False,
     }
     defaults.update(kwargs)
     return CompressionConfig(**defaults)

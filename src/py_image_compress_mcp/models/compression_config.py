@@ -51,10 +51,6 @@ class CompressionConfig(BaseModel):
     optimize: bool = Field(True, description="启用优化")
     progressive: bool = Field(True, description="渐进式JPEG")
     strip_metadata: bool = Field(False, description="移除元数据")
-    keep_orientation: bool = Field(True, description="保持图片方向信息")
-
-    # 压缩策略选项
-    fallback_to_original: bool = Field(False, description="压缩效果差时回退到原文件")
 
     @model_validator(mode="after")
     def validate_custom_quality(self) -> "CompressionConfig":
@@ -269,58 +265,3 @@ class CompressionValidators:
             )
 
         return standard_format
-
-    @staticmethod
-    def validate_quality(quality: int | None) -> int | None:
-        """验证质量参数
-
-        Args:
-            quality: 质量值
-
-        Returns:
-            int | None: 验证后的质量值
-
-        Raises:
-            ValidationError: 质量值无效时
-        """
-        from ..exceptions import ValidationError
-
-        if quality is None:
-            return None
-
-        if not isinstance(quality, int) or not (1 <= quality <= 100):
-            raise ValidationError(f"质量值必须在 1-100 之间的整数，得到: {quality}")
-
-        return quality
-
-    @staticmethod
-    def validate_dimensions(
-        width: int | None, height: int | None
-    ) -> tuple[int | None, int | None]:
-        """验证尺寸参数
-
-        Args:
-            width: 宽度
-            height: 高度
-
-        Returns:
-            tuple: 验证后的宽度和高度
-
-        Raises:
-            ValidationError: 尺寸无效时
-        """
-        from ..exceptions import ValidationError
-
-        if width is not None:
-            if not isinstance(width, int) or width <= 0:
-                raise ValidationError(f"宽度必须是正整数，得到: {width}")
-            if width > 50000:  # 合理的限制
-                raise ValidationError(f"宽度超过限制 50000，得到: {width}")
-
-        if height is not None:
-            if not isinstance(height, int) or height <= 0:
-                raise ValidationError(f"高度必须是正整数，得到: {height}")
-            if height > 50000:  # 合理的限制
-                raise ValidationError(f"高度超过限制 50000，得到: {height}")
-
-        return width, height

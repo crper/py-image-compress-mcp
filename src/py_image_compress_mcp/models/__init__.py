@@ -21,14 +21,7 @@ from .compression_result import (
 )
 from .constants import (
     ImageFormats,
-    ProcessingDefaults,
-    QualityDefaults,
-    ValidationLimits,
-    get_extension,
     get_format_alias,
-    get_mime_type,
-    is_lossless_format,
-    supports_transparency,
 )
 from .image_metadata import (
     BasicImageInfo,
@@ -61,17 +54,10 @@ __all__ = [
     "ImageInfoResponse",
     "ImageMetadata",
     "MultiFormatResult",
-    "ProcessingDefaults",
     "ProcessingResult",
-    "QualityDefaults",
     "QualityMode",
     "ResizeConfig",
     "StrategyType",
-    "ValidationLimits",
-    "get_extension",
     "get_format_alias",
-    "get_mime_type",
-    "is_lossless_format",
-    "supports_transparency",
     # "ValidationError" 已移至 exceptions 模块
 ]

@@ -8,7 +8,6 @@ from pathlib import Path
 
 from PIL import Image
 
-from ..models.constants import get_mime_type
 from .logging_helpers import get_logger
 from .message_formatter import MessageFormatter
 
@@ -81,26 +80,3 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def get_image_mime_type(file_path: str | Path) -> str | None:
-    """获取图片文件的 MIME 类型
-
-    使用统一的常量映射获取准确的 MIME 类型
-
-    Args:
-        file_path: 图片文件路径
-
-    Returns:
-        str | None: MIME 类型，如 'image/jpeg'，失败时返回 None
-    """
-    try:
-        with Image.open(file_path) as img:
-            if img.format:
-                # 使用统一的常量映射
-                mime_type = get_mime_type(img.format)
-                return mime_type or f"image/{img.format.lower()}"
-            return None
-    except Exception as e:
-        logger.debug(MessageFormatter.operation_failed("获取 MIME 类型", file_path, e))
-        return None

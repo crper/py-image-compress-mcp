@@ -128,50 +128,6 @@ class BatchProcessor:
                 error_message=str(e),
             )
 
-    def process_files_concurrent(
-        self,
-        files: list[Path],
-        output_dir: Path,
-        quality: int | None = None,
-        format: str | None = None,
-        max_width: int | None = None,
-        max_height: int | None = None,
-    ) -> list[CompressionResult]:
-        """并发处理文件列表
-
-        Args:
-            files: 文件路径列表
-            output_dir: 输出目录
-            quality: 压缩质量
-            format: 输出格式
-            max_width: 最大宽度
-            max_height: 最大高度
-
-        Returns:
-            list[CompressionResult]: 处理结果列表
-        """
-        if not files:
-            return []
-
-        # 直接创建压缩配置列表
-        compression_configs = [
-            self.config_builder.build(
-                input_path=file_path,
-                output_dir=output_dir,
-                quality=quality,
-                format=format,
-                max_width=max_width,
-                max_height=max_height,
-            )
-            for file_path in files
-        ]
-
-        # 使用通用并发执行器
-        return self.concurrent_executor.execute_tasks(
-            compression_configs=compression_configs,
-            task_function=process_image,
-        )
-
     def _process_files_with_structure(
         self,
         image_files: list[Path],

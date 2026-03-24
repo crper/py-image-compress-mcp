@@ -331,54 +331,6 @@ class CompressionOptimizer:
         elif file_size_mb < 0.5:
             params["method"] = 6
 
-    def estimate_compression_ratio(
-        self, format_name: str, metadata: ImageMetadata, quality: int | None = None
-    ) -> float:
-        """估算压缩比
-
-        Args:
-            format_name: 目标格式
-            metadata: 图像元数据
-            quality: 质量设置
-
-        Returns:
-            float: 估算的压缩比（0-1之间）
-        """
-        try:
-            basic = metadata.basic_info
-            characteristics = analyze_image_from_metadata(metadata)
-
-            # 基础压缩比估算
-            base_ratio = {
-                "JPEG": 0.1 if characteristics.is_photo_like else 0.2,
-                "PNG": 0.3 if characteristics.is_simple_graphic else 0.6,
-                "WEBP": 0.08 if characteristics.is_photo_like else 0.15,
-            }.get(format_name, 0.5)
-
-            # 基于质量调整
-            if quality is not None:
-                quality_factor = quality / 100.0
-                if format_name == "JPEG":
-                    base_ratio *= 0.5 + quality_factor * 0.5
-                elif format_name == "WEBP" and quality < 100:
-                    base_ratio *= 0.3 + quality_factor * 0.7
-
-            # 基于图像特征调整
-            if characteristics.is_simple_graphic:
-                base_ratio *= 0.7  # 简单图形压缩更好
-            elif characteristics.is_photo_like:
-                base_ratio *= 1.2  # 照片压缩相对较差
-
-            # 基于透明度调整
-            if basic.has_transparency:
-                base_ratio *= 1.3  # 透明图片通常更大
-
-            return min(1.0, max(0.05, base_ratio))
-
-        except Exception as e:
-            logger.warning(f"压缩比估算失败: {e}")
-            return 0.5  # 默认估算值
-
     def _optimize_avif_params(
         self,
         config: CompressionConfig,  # noqa: ARG002

@@ -3,12 +3,7 @@
 定义统一的异常类和错误处理机制，包含现代化的异常处理装饰器。
 """
 
-from collections.abc import Callable
-from functools import wraps
 from pathlib import Path
-from typing import TypeVar
-
-from PIL.Image import DecompressionBombError, UnidentifiedImageError
 
 from .models.compression_result import BatchResult, CompressionResult
 from .utils.logging_helpers import get_logger
@@ -16,7 +11,6 @@ from .utils.message_formatter import MessageFormatter
 
 
 logger = get_logger()
-T = TypeVar("T")
 
 
 # 统一的异常类型
@@ -45,40 +39,6 @@ class UnsupportedFormatError(CompressionError):
     """不支持的格式错误"""
 
     pass
-
-
-# 现代化异常处理装饰器
-def handle_image_errors(operation_name: str = "图像处理"):
-    """统一的图像处理异常处理装饰器
-
-    Args:
-        operation_name: 操作名称，用于日志记录
-    """
-
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @wraps(func)
-        def wrapper(*args, **kwargs) -> T:
-            try:
-                return func(*args, **kwargs)
-            except UnidentifiedImageError as e:
-                logger.error(f"{operation_name} - 无法识别图像格式: {e}")
-                raise UnsupportedFormatError(f"不支持的图像格式: {e}") from e
-            except DecompressionBombError as e:
-                logger.error(f"{operation_name} - 图像过大: {e}")
-                raise ProcessingError(f"图像文件过大，可能存在安全风险: {e}") from e
-            except OSError as e:
-                logger.error(f"{operation_name} - 文件操作失败: {e}")
-                raise ProcessingError(f"文件操作失败: {e}") from e
-            except (ValueError, TypeError) as e:
-                logger.error(f"{operation_name} - 参数错误: {e}")
-                raise ValidationError(f"参数错误: {e}") from e
-            except Exception as e:
-                logger.error(f"{operation_name} - 未知错误: {e}")
-                raise ProcessingError(f"处理失败: {e}") from e
-
-        return wrapper
-
-    return decorator
 
 
 class ErrorHandler:
