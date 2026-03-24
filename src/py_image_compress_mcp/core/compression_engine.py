@@ -31,6 +31,7 @@ FAST_INFO_EXTRACTOR = ImageInfoExtractor(
     include_xmp=False,
     include_histogram=False,
     include_complexity=True,
+    prefer_decoder_draft=True,
 )
 FORMAT_PROCESSOR = FormatProcessor()
 STRATEGY = CompressionStrategy()
@@ -247,7 +248,7 @@ def _process_image(
 ) -> tuple[Image.Image, bool, tuple[int, int]]:
     """处理图片：EXIF旋转、尺寸调整、格式转换"""
     # 处理EXIF旋转
-    img = ImageOps.exif_transpose(img)
+    ImageOps.exif_transpose(img, in_place=True)
     original_dimensions = img.size
 
     # 调整尺寸（如果需要）

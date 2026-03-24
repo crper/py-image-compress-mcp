@@ -129,16 +129,6 @@ class CompressionStrategy:
     ) -> CompressionDecision:
         """基于因子做出决策，使用 match-case 简化逻辑"""
 
-        # 跳过压缩的情况
-        if self._should_skip_compression(metadata):
-            return CompressionDecision(
-                strategy_type=StrategyType.SKIP,
-                recommended_quality=None,
-                recommended_format=None,
-                skip_compression=True,
-                reason="文件已经很小或已经高度压缩",
-            )
-
         # 构建决策上下文元组
         context = (
             factors["has_transparency"],

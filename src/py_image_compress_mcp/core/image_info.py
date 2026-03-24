@@ -55,6 +55,7 @@ class ImageInfoExtractor:
         include_histogram: bool = True,
         include_complexity: bool = True,
         analysis_max_pixels: int = 256 * 256,
+        prefer_decoder_draft: bool = False,
     ) -> None:
         """初始化提取器
 
@@ -71,6 +72,7 @@ class ImageInfoExtractor:
         self.include_histogram = include_histogram
         self.include_complexity = include_complexity
         self.analysis_max_pixels = max(1, analysis_max_pixels)
+        self.prefer_decoder_draft = prefer_decoder_draft
 
     def extract(self, file_path: str | Path) -> ImageMetadata:
         """提取完整的图片元数据
@@ -89,9 +91,12 @@ class ImageInfoExtractor:
         """
         file_path = Path(file_path)
 
+        if self._uses_complexity_only_analysis():
+            return self._extract_complexity_only(file_path)
+
         with Image.open(file_path) as img:
-            # 处理EXIF旋转
-            img = ImageOps.exif_transpose(img)
+            # 直接在原对象上执行方向归一化，避免额外复制整张图片。
+            ImageOps.exif_transpose(img, in_place=True)
 
             # 提取基础信息
             basic_info = self._extract_basic_info(img, file_path)
@@ -117,18 +122,66 @@ class ImageInfoExtractor:
                 complexity=complexity,
             )
 
+    def _uses_complexity_only_analysis(self) -> bool:
+        """判断是否处于仅供压缩决策使用的轻量分析模式。"""
+        return (
+            self.prefer_decoder_draft
+            and self.include_complexity
+            and not self.include_exif
+            and not self.include_icc
+            and not self.include_xmp
+            and not self.include_histogram
+        )
+
+    def _extract_complexity_only(self, file_path: Path) -> ImageMetadata:
+        """为压缩热路径提取最小必需元数据。"""
+        with Image.open(file_path) as img:
+            basic_info = self._extract_basic_info(img, file_path)
+            analysis_img = self._prepare_analysis_image(img)
+            complexity = self._calculate_complexity(analysis_img)
+
+            return ImageMetadata(
+                basic_info=basic_info,
+                exif_data=None,
+                icc_profile=None,
+                xmp_data=None,
+                histogram=None,
+                complexity=complexity,
+            )
+
     def _prepare_analysis_image(self, img: Image.Image) -> Image.Image:
         """为计算密集型分析准备采样图。"""
         pixel_count = img.width * img.height
         if pixel_count <= self.analysis_max_pixels:
             return img
 
-        ratio = (self.analysis_max_pixels / pixel_count) ** 0.5
-        new_size = (
-            max(1, int(img.width * ratio)),
-            max(1, int(img.height * ratio)),
-        )
+        new_size = self._get_analysis_size(img.width, img.height)
+
+        if self.prefer_decoder_draft:
+            self._apply_decoder_draft(img, new_size)
+            pixel_count = img.width * img.height
+            if pixel_count <= self.analysis_max_pixels:
+                return img
+
         return img.resize(new_size, Image.Resampling.BILINEAR)
+
+    def _get_analysis_size(self, width: int, height: int) -> tuple[int, int]:
+        """计算采样图目标尺寸。"""
+        pixel_count = width * height
+        ratio = (self.analysis_max_pixels / pixel_count) ** 0.5
+        return (
+            max(1, int(width * ratio)),
+            max(1, int(height * ratio)),
+        )
+
+    def _apply_decoder_draft(
+        self, img: Image.Image, target_size: tuple[int, int]
+    ) -> None:
+        """尽量让 Pillow 在解码阶段直接降采样。"""
+        try:
+            img.draft(img.mode, target_size)
+        except Exception as exc:
+            logger.debug("draft 预降采样不可用: %s", exc)
 
     def _detect_transparency(self, img: Image.Image) -> bool:
         """检测图片是否有透明度 - 使用简化的Pillow API检测"""
